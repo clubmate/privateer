@@ -1,5 +1,6 @@
 import {
   ACESFilmicToneMapping,
+  PCFSoftShadowMap,
   PerspectiveCamera,
   PMREMGenerator,
   Scene,
@@ -14,8 +15,8 @@ import { Starfield } from './world/Starfield';
 import { Sun } from './world/Sun';
 import { Ship } from './ship/Ship';
 import { FlightModel } from './ship/FlightModel';
-import { loadShipInterior } from './ship/InteriorLoader';
-import { createInteriorEnvironment } from './ship/InteriorEnvironment';
+import { loadShipInterior, setInteriorEnvironment } from './ship/InteriorLoader';
+import { captureInteriorEnvironment, createInteriorEnvironment } from './ship/InteriorEnvironment';
 import { SeatedController } from './player/SeatedController';
 import { WalkController } from './player/WalkController';
 import { PlayerState } from './player/PlayerState';
@@ -26,32 +27,55 @@ import { Targeting } from './combat/Targeting';
 import { HullCollision } from './combat/HullCollision';
 import { CameraShake } from './player/CameraShake';
 import { RadarScreen } from './ship/RadarScreen';
-import { createPostprocessing } from './render/Postprocessing';
+import { createPostprocessing, DEEP_LAYER, WORLD_LAYER } from './render/Postprocessing';
 
 const container = document.getElementById('app');
 if (!container) throw new Error('#app fehlt in index.html');
 
 const renderer = new WebGLRenderer({
+  // Kein logarithmicDepthBuffer mehr: der schreibt gl_FragDepth pro Fragment
+  // und macht damit jede Tiefenrekonstruktion im Schirmraum unmoeglich (GTAO).
+  // Die Tiefenspanne loest stattdessen der zweigeteilte Renderpfad, siehe
+  // render/Postprocessing.ts.
   antialias: true,
-  logarithmicDepthBuffer: true,
   powerPreference: 'high-performance',
 });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
+// Schatten im Innenraum: Lampen und Einrichtung stehen fest zueinander, also
+// wird die Schattenkarte genau einmal gezeichnet statt in jedem Frame.
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = PCFSoftShadowMap;
+renderer.shadowMap.autoUpdate = false;
 container.appendChild(renderer.domElement);
 
 const scene = new Scene();
 
-// near 0.05 / far 1e7: Cockpit bei 0,1 m und Planet bei 850 km im selben
-// Frustum — moeglich durch logarithmicDepthBuffer.
-const camera = new PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.05, 1e7);
+// Nahkamera: Innenraum, 5 cm bis 3 km. Das reicht bis weit hinter die Kanzel
+// und laesst dem Tiefenpuffer im Cockpit Millimeter-Aufloesung.
+const camera = new PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.05, 3000);
 camera.rotation.order = 'YXZ';
+camera.layers.set(0);
 
-// Bloom laeuft ueber einen EffectComposer; das Canvas selbst braucht dann kein
-// Antialiasing mehr, das uebernimmt das multisampelte Zwischenziel.
-const post = createPostprocessing(renderer, scene, camera);
+// Weltkamera: Asteroiden, Geschosse, Effekte. `near` bleibt klein genug, dass
+// ein Brocken direkt vor der Nase nicht abgeschnitten wird.
+const worldCamera = new PerspectiveCamera(65, window.innerWidth / window.innerHeight, 1, 30_000);
+worldCamera.layers.set(WORLD_LAYER);
+scene.add(worldCamera);
+
+// Tiefenkamera: Sterne (2000 km), Sonne (1500 km), Planet (850 km). Das nahe
+// Ende liegt weit draussen — nur so bleibt die Wolkenschale des Planeten
+// sauber von seiner Oberflaeche getrennt.
+const deepCamera = new PerspectiveCamera(65, window.innerWidth / window.innerHeight, 5_000, 5e6);
+deepCamera.layers.set(DEEP_LAYER);
+scene.add(deepCamera);
+
+// Bloom und Umgebungsverdeckung laufen ueber einen EffectComposer; das Canvas
+// selbst braucht dann kein Antialiasing mehr, das uebernimmt das
+// multisampelte Zwischenziel.
+const post = createPostprocessing(renderer, scene, camera, worldCamera, deepCamera);
 
 // --------------------------------------------------------------------- Welt
 const sun = new Sun(new Vector3(0.8, 0.3, -0.1).normalize());
@@ -78,6 +102,20 @@ const shake = new CameraShake();
 const radar = new RadarScreen();
 
 scene.add(starfield, sun, planet, asteroids, ship, weapons.mesh, effects);
+
+// Jedes Objekt in seinen Entfernungsbereich legen. Geschosse und Effekte
+// gehoeren zur Welt: sie fliegen zwischen den Brocken, und im Nah-Durchgang
+// (Tiefe geloescht) laegen sie faelschlich immer davor.
+for (const object of [asteroids, weapons.mesh, effects]) {
+  object.traverse((child) => child.layers.set(WORLD_LAYER));
+}
+for (const object of [starfield, sun, planet]) {
+  object.traverse((child) => child.layers.set(DEEP_LAYER));
+}
+// Das Sonnenlicht ist die Ausnahme: In Three beleuchtet ein Licht nur, was
+// seine Layer teilt. Nur die Sonnenscheibe gehoert in die Tiefe — ihr Licht
+// muss Asteroiden und Innenraum gleichermassen erreichen.
+sun.light.layers.enableAll();
 
 // Kamera sitzt starr auf dem Pilotenmarker und erbt damit dessen Position und
 // Blickrichtung (-Z). Ueber den Marker haengt sie am Schiffs-Rig.
@@ -116,11 +154,32 @@ loadShipInterior(`${import.meta.env.BASE_URL}models/ship-interior.glb`, interior
     // Kamera haengt noch am alten Sitzmarker und muss neu angebunden werden;
     // ausserdem brauchen die Kollisionsboxen die neuen COL_-Meshes.
     player.refreshInterior();
+    // Die echte Reflexionsaufnahme braucht den fertig aufgebauten Raum; sie
+    // laeuft deshalb erst im naechsten Frame (siehe `pendingCapture`).
+    pendingCapture = true;
     console.info(`Innenraum geladen: ${ship.getCollisionMeshes().length} COL_-Meshes`);
   })
   .catch((error) => {
     console.warn('Innenraum-GLB nicht geladen, Placeholder bleibt aktiv:', error);
   });
+
+/**
+ * Sobald der Innenraum steht, wird einmal eine Cubemap an Bord aufgenommen und
+ * als Reflexionsumgebung eingesetzt. Erst im Frame danach, damit Materialien,
+ * Displays und Lampen bereits gesetzt sind.
+ */
+let pendingCapture = false;
+const captureOrigin = new Vector3();
+
+function captureReflections(): void {
+  pendingCapture = false;
+  // Einmalige Schattenkarte, sobald der Innenraum steht.
+  renderer.shadowMap.needsUpdate = true;
+  const interior = ship.getInterior();
+  // Mitte des Gangs: von dort sieht die Cubemap in alle drei Sektionen.
+  captureOrigin.set(0, 1.5, 0).applyMatrix4(ship.matrixWorld);
+  setInteriorEnvironment(interior, captureInteriorEnvironment(renderer, scene, captureOrigin));
+}
 
 // ------------------------------------------------------------ Floating Origin
 /** Ab dieser Entfernung vom Ursprung wird die Welt zurueckgeschoben. */
@@ -142,6 +201,7 @@ function applyFloatingOrigin(): void {
 // ---------------------------------------------------------------- Game-Loop
 const time = new Time();
 const cameraWorldPos = new Vector3();
+const farCameraScale = new Vector3();
 const forward = new Vector3();
 
 /** Physik-Hook, fester Timestep (120 Hz). */
@@ -181,11 +241,21 @@ function render(dt: number): void {
   shake.update(dt);
   shake.applyTo(camera);
   scene.updateMatrixWorld();
+
+  // Beide Aussenkameras auf dieselbe Pose setzen; sie haengen am
+  // Szenenwurzelknoten, die Nahkamera dagegen am Schiff.
+  camera.matrixWorld.decompose(worldCamera.position, worldCamera.quaternion, farCameraScale);
+  worldCamera.updateMatrixWorld();
+  deepCamera.position.copy(worldCamera.position);
+  deepCamera.quaternion.copy(worldCamera.quaternion);
+  deepCamera.updateMatrixWorld();
+
   camera.getWorldPosition(cameraWorldPos);
   starfield.update(cameraWorldPos);
   sun.update(cameraWorldPos);
 
   post.render();
+  if (pendingCapture) captureReflections();
 
   hud.update({
     camera,
@@ -233,6 +303,10 @@ renderer.setAnimationLoop(() => {
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
+  worldCamera.aspect = camera.aspect;
+  worldCamera.updateProjectionMatrix();
+  deepCamera.aspect = camera.aspect;
+  deepCamera.updateProjectionMatrix();
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   post.setSize(window.innerWidth, window.innerHeight);
@@ -244,5 +318,6 @@ Object.assign(window as unknown as Record<string, unknown>, {
   __privateer: {
     ship, flight, seated, walk, player, hud, camera, input, scene,
     weapons, effects, asteroids, targeting, hull, shake, radar,
+    post, renderer,
   },
 });

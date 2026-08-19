@@ -1,6 +1,7 @@
 import {
   Box3,
   BufferAttribute,
+  Color,
   DoubleSide,
   FrontSide,
   Mesh,
@@ -13,6 +14,7 @@ import type { Material, Texture } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { createScreenTexture, type ScreenKind } from './InteriorScreens';
 import { createSurfaceMaps, TILE_METERS, type SurfaceKind, type SurfaceMaps } from './InteriorSurfaces';
+import { addLightShafts } from './LightShafts';
 
 /**
  * Laedt `public/models/ship-interior.glb` und bringt es auf die Konventionen
@@ -68,6 +70,17 @@ const LIGHTS: Array<[string, number, number, [number, number, number], number]> 
 const LIGHT_DECAY = 1.25;
 
 /**
+ * Lampen, die Schatten werfen. Punktlichter kosten sechs Schattenrenderings
+ * pro Stueck — deshalb nur die drei Raumleuchten und nicht jede Akzentlampe.
+ * Da sich im Innenraum nichts bewegt, wird die Schattenkarte ohnehin nur
+ * einmal gezeichnet (siehe `renderer.shadowMap.autoUpdate` in main.ts).
+ */
+const SHADOW_CASTERS = new Set(['Light_Cockpit', 'Light_Corridor', 'Light_Bay_Fore']);
+
+/** Aufloesung der Schattenkarte je Wuerfelseite. */
+const SHADOW_MAP_SIZE = 1024;
+
+/**
  * Sitzpose. Das GLB setzt den Augenpunkt auf (0, 1.22, 3.20); das sitzt tief
  * und dicht an der Konsole — man schaut vor allem auf das Armaturenbrett.
  * Etwas hoeher und ein Stueck zurueck (Kopf vor der Rueckenlehne) gibt freie
@@ -115,6 +128,53 @@ const NORMAL_SCALE = 0.55;
  */
 const UV_OFFSET: [number, number] = [0.137, 0.081];
 
+/**
+ * Materialkorrektur gegen das GLB: dort ist praktisch alles Metall
+ * (metalness 0,70–0,92) bei sehr dunkler Grundfarbe. Metalle haben keinen
+ * diffusen Anteil — ihr ganzes Aussehen kommt aus der Reflexion, und die wird
+ * mit der Grundfarbe eingefaerbt. Bei 0,10 bleibt davon fast nichts uebrig:
+ * genau daher das flache, tote Grau.
+ *
+ * Richtig ist die Trennung nach Bauart: **lackierte Bleche sind Dielektrika**
+ * (metalness ~0), blankes Stahlzeug bleibt metallisch und wird deutlich heller.
+ */
+const MATERIAL_LOOK: Record<string, { color: number; metalness: number; roughness: number }> = {
+  // Lackierte Innenverkleidung — heller Grauton mit kuehlem Stich.
+  Panel_Metal: { color: 0x565c64, metalness: 0.04, roughness: 0.55 },
+  // Dieselbe Farbe, aber abgegriffen und matter.
+  Panel_Metal_Worn: { color: 0x54564f, metalness: 0.06, roughness: 0.72 },
+  // Rumpfstruktur, etwas dunkler und kaelter als die Verkleidung.
+  Hull_Metal: { color: 0x424951, metalness: 0.08, roughness: 0.62 },
+  // Blankes Profilstahl: bleibt metallisch, wird aber deutlich heller.
+  Strut_Steel: { color: 0x767a80, metalness: 0.9, roughness: 0.42 },
+  // Verzinkter Gitterrost.
+  Floor_Grate: { color: 0x3d4247, metalness: 0.75, roughness: 0.62 },
+  // Rost ist Oxid, also kein Metall.
+  Accent_Rust: { color: 0x6b3a22, metalness: 0.08, roughness: 0.85 },
+  // Warnfarbe muss lesbar sein.
+  Accent_Hazard: { color: 0xb08f2b, metalness: 0.0, roughness: 0.6 },
+  // Sitzpolster.
+  Seat_Padding: { color: 0x2f3336, metalness: 0.0, roughness: 0.92 },
+};
+
+/**
+ * Farbidentitaet der drei Sektionen. Bisher war das ganze Schiff einheitlich
+ * graublau; jetzt bekommt jeder Bereich einen eigenen Ton, damit man beim
+ * Durchgehen merkt, wo man ist. Zugeordnet wird ueber die Namenskuerzel im
+ * GLB (`_Ck_` Cockpit, `_Cr_` Gang, `_Bay_`/`Bay` Frachtraum).
+ */
+const SECTION_TINTS: Array<{ match: RegExp; color: number; name: string }> = [
+  // Cockpit: kuehl und technisch.
+  { match: /Ck|Canopy|Console|Glareshield|Nose|Pedal|Stick|Throttle|Bezel/, color: 0x7d93ad, name: 'Cockpit' },
+  // Gang: neutral, etwas dunkler.
+  { match: /Cr(_|[0-9])|Corridor|DoorFrame/, color: 0x8d8d8a, name: 'Gang' },
+  // Frachtraum: warm, benutzt, oelig.
+  { match: /Bay|Bunk|Locker|Bench|Crate/, color: 0x9c8a6e, name: 'Frachtraum' },
+];
+
+/** Materialien, die keine Sektionsfaerbung bekommen (Leuchten, Glas, Displays). */
+const TINT_EXEMPT = /^(Glass|Light_Strip|Light_Strip_Red|Screen_|Collision)/;
+
 /** Displaymotiv je Screen-Mesh; die Farbe kommt aus dem GLB-Material. */
 const SCREENS: Record<string, ScreenKind> = {
   SM_Screen_MFD: 'bars',
@@ -148,11 +208,12 @@ const INTERIOR_CENTER = new Vector3(0, 1.15, 0);
 
 /**
  * Staerke der Umgebungsreflexion auf den Innenraummaterialien. Das
- * PMREM-Environment ist die eigentliche Grundhelligkeit des Raums — es
- * leuchtet gleichmaessig und kann deshalb hoch stehen, ohne zu blenden,
- * waehrend die Punktlampen nur noch Akzente setzen.
+ * PMREM-Environment traegt die Grundhelligkeit des Raums, ohne zu blenden.
+ * Seit die lackierten Flaechen Dielektrika sind (siehe {@link MATERIAL_LOOK}),
+ * haben sie wieder einen diffusen Anteil und brauchen deutlich weniger davon
+ * als die frueheren Schwarzmetalle.
  */
-const ENV_INTENSITY = 1.6;
+const ENV_INTENSITY = 0.85;
 const ENV_INTENSITY_GLASS = 0.6;
 
 /**
@@ -175,6 +236,18 @@ function addInteriorLights(root: Object3D): void {
     const light = new PointLight(color, intensity, distance, LIGHT_DECAY);
     light.name = name;
     light.position.set(pos[0], pos[1], pos[2]);
+
+    if (SHADOW_CASTERS.has(name)) {
+      light.castShadow = true;
+      light.shadow.mapSize.set(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+      light.shadow.camera.near = 0.1;
+      light.shadow.camera.far = distance;
+      // Kantiges Modell mit grossen Flaechen: ohne Normal-Bias zieht sich der
+      // Selbstschatten als Streifenmuster ueber Waende und Decke.
+      light.shadow.bias = -0.002;
+      light.shadow.normalBias = 0.035;
+    }
+
     root.add(light);
   }
 }
@@ -220,6 +293,7 @@ function fixMaterials(root: Object3D, environment: Texture | null): void {
 }
 
 const _box = new Box3();
+const _tint = new Color();
 const _point = new Vector3();
 const _normal = new Vector3();
 
@@ -429,6 +503,71 @@ function planarUv(mesh: Mesh, normal: Vector3): void {
 }
 
 /**
+ * Sichtbare Meshes werfen und empfangen Schatten; Kollisionsboxen nicht.
+ */
+function enableShadows(root: Object3D): void {
+  root.traverse((obj) => {
+    if (!(obj instanceof Mesh) || obj.name.startsWith('COL_')) return;
+    obj.castShadow = true;
+    obj.receiveShadow = true;
+  });
+}
+
+/**
+ * Materialien auf die Kennwerte aus {@link MATERIAL_LOOK} bringen.
+ */
+function fixMaterialLook(root: Object3D): void {
+  const done = new Set<Material>();
+  root.traverse((obj) => {
+    if (!(obj instanceof Mesh) || obj.name.startsWith('COL_')) return;
+    const materials: Material[] = Array.isArray(obj.material) ? obj.material : [obj.material];
+    for (const material of materials) {
+      if (!material || done.has(material)) continue;
+      done.add(material);
+
+      const look = MATERIAL_LOOK[material.name];
+      if (!look || !(material instanceof MeshStandardMaterial)) continue;
+      material.color.setHex(look.color);
+      material.metalness = look.metalness;
+      material.roughness = look.roughness;
+      material.needsUpdate = true;
+    }
+  });
+}
+
+/**
+ * Sektionsfaerbung: Meshes bekommen je nach Bereich eine eigene Materialkopie
+ * mit leicht verschobenem Farbton (siehe {@link SECTION_TINTS}). Kopiert wird
+ * je Kombination aus Material und Sektion, damit die Zahl der Materialien
+ * klein bleibt.
+ */
+function tintSections(root: Object3D): void {
+  const variants = new Map<string, MeshStandardMaterial>();
+
+  root.traverse((obj) => {
+    if (!(obj instanceof Mesh) || obj.name.startsWith('COL_')) return;
+    const source = Array.isArray(obj.material) ? obj.material[0] : obj.material;
+    if (!(source instanceof MeshStandardMaterial)) return;
+    if (TINT_EXEMPT.test(source.name)) return;
+
+    const section = SECTION_TINTS.find((entry) => entry.match.test(obj.name));
+    if (!section) return;
+
+    const key = `${source.name}#${section.name}`;
+    let material = variants.get(key);
+    if (!material) {
+      material = source.clone();
+      material.name = key;
+      // Mischung statt Ersetzung: die Materialfarbe bleibt fuehrend, der
+      // Sektionston legt sich nur darueber.
+      material.color.lerp(_tint.setHex(section.color), 0.22);
+      variants.set(key, material);
+    }
+    obj.material = material;
+  });
+}
+
+/**
  * Boxprojizierte UVs in Modellkoordinaten: pro Vertex entscheidet die Normale,
  * welche der drei Achsen wegfaellt. Weil projiziert wird, passen benachbarte
  * Teile ohne Naht zueinander, und eine UV-Einheit entspricht ueberall
@@ -532,6 +671,26 @@ function applyScreens(root: Object3D): void {
 }
 
 /**
+ * Reflexionsumgebung nachtraeglich austauschen — dafuer gedacht, die
+ * nachgebaute Kammer durch eine Aufnahme des echten Innenraums zu ersetzen
+ * (siehe `captureInteriorEnvironment`).
+ */
+export function setInteriorEnvironment(root: Object3D, environment: Texture): void {
+  const done = new Set<Material>();
+  root.traverse((obj) => {
+    if (!(obj instanceof Mesh)) return;
+    const materials: Material[] = Array.isArray(obj.material) ? obj.material : [obj.material];
+    for (const material of materials) {
+      if (!material || done.has(material) || !(material instanceof MeshStandardMaterial)) continue;
+      done.add(material);
+      material.envMap = environment;
+      material.envMapIntensity = material.name === GLASS_MATERIAL ? ENV_INTENSITY_GLASS : ENV_INTENSITY;
+      material.needsUpdate = true;
+    }
+  });
+}
+
+/**
  * Laedt den Innenraum. Der zurueckgegebene Root traegt den Namen
  * `ShipInterior` und kann direkt an `Ship.setInterior()` uebergeben werden.
  *
@@ -558,12 +717,16 @@ export async function loadShipInterior(
   }
 
   fixMaterials(root, environment);
+  fixMaterialLook(root);
   separateCoplanarFaces(root);
   separateDecals(root);
   declutterCockpit(root);
   applySurfaces(root);
+  tintSections(root);
   applyScreens(root);
+  enableShadows(root);
   addInteriorLights(root);
+  addLightShafts(root);
 
   return root;
 }

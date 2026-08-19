@@ -2,12 +2,17 @@ import {
   BackSide,
   BoxGeometry,
   Color,
+  CubeCamera,
   DoubleSide,
+  HalfFloatType,
   Mesh,
   MeshBasicMaterial,
   PlaneGeometry,
+  PMREMGenerator,
   Scene,
+  WebGLCubeRenderTarget,
 } from 'three';
+import type { Texture, Vector3, WebGLRenderer } from 'three';
 
 /**
  * Kleine Ersatzumgebung fuer die Reflexionen im Schiffsinneren.
@@ -61,4 +66,44 @@ export function createInteriorEnvironment(): Scene {
   scene.add(panel(3.4, 1.6, new Color(0.09, 0.08, 0.07), [0, 0.4, 5.4], [0, 0, 0]));
 
   return scene;
+}
+
+/** Aufloesung der Cubemap, aus der die Reflexion gefiltert wird. */
+const CAPTURE_SIZE = 256;
+
+/**
+ * Reflexionsumgebung aus dem *tatsaechlichen* Innenraum aufnehmen.
+ *
+ * {@link createInteriorEnvironment} ist nur eine nachgebaute Kammer — die
+ * Metalle spiegeln damit etwas, das es im Schiff gar nicht gibt. Hier wird
+ * stattdessen einmal eine Cubemap an Ort und Stelle gerendert und daraus die
+ * PMREM-Textur gefiltert: die Verkleidung spiegelt danach die echten Leuchten,
+ * Displays und Waende.
+ *
+ * Aufgenommen wird nur Layer 0 (der Innenraum). Die Aussenwelt liegt in
+ * anderen Entfernungsbereichen und braeuchte ein eigenes Frustum; fuer eine
+ * Reflexion in mattem Metall faellt sie ohnehin kaum ins Gewicht.
+ */
+export function captureInteriorEnvironment(
+  renderer: WebGLRenderer,
+  scene: Scene,
+  position: Vector3,
+): Texture {
+  const target = new WebGLCubeRenderTarget(CAPTURE_SIZE, { type: HalfFloatType });
+  const camera = new CubeCamera(0.05, 60, target);
+  // Layer wirken nicht rekursiv: die sechs Teilkameras muessen einzeln gesetzt
+  // werden, sonst nimmt die Aufnahme auch Sterne und Planet mit.
+  for (const child of camera.children) child.layers.set(0);
+  camera.position.copy(position);
+  camera.updateMatrixWorld(true);
+
+  scene.add(camera);
+  camera.update(renderer, scene);
+  scene.remove(camera);
+
+  const pmrem = new PMREMGenerator(renderer);
+  const texture = pmrem.fromCubemap(target.texture).texture;
+  pmrem.dispose();
+  target.dispose();
+  return texture;
 }

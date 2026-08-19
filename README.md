@@ -71,8 +71,34 @@ weiterfliegt.
   Kraeften, Traegheit und Drehimpuls, wahlweise mit Flight-Assist (daempft die
   Rotation und regelt auf die Sollgeschwindigkeit) oder voellig frei. Fester
   Physik-Timestep mit 120 Hz, Rendern mit variabler Framerate.
-- **Bild:** Bloom ueber einen `EffectComposer` (Leuchtstreifen, Displays, Sonne);
-  das Antialiasing macht das multisampelte Zwischenziel.
+- **Renderpfad:** Drei Entfernungsbereiche, von hinten nach vorn gezeichnet,
+  dazwischen wird nur die Tiefe geloescht — Sterne/Sonne/Planet (5 km bis
+  5000 km), Asteroiden/Geschosse (1 m bis 30 km), Innenraum (5 cm bis 3 km).
+  Vorher hielt ein logarithmischer Tiefenpuffer die ganze Spanne zusammen; der
+  schreibt aber `gl_FragDepth` pro Fragment und macht damit jedes
+  Schirmraum-Verfahren unmoeglich. Die Aufteilung laeuft ueber Layer. Lichter
+  sind davon ausgenommen: das Sonnenlicht steht auf allen Layern, sonst
+  bekaemen die Asteroiden kein Licht.
+- **Bild:** Umgebungsverdeckung (GTAO), Bloom und Tonemapping ueber einen
+  `EffectComposer`; das Antialiasing macht das multisampelte Zwischenziel. Die
+  Verdeckung ist der teuerste Teil — `post.setAmbientOcclusion(false)` schaltet
+  sie ab.
+- **Materialien:** Im GLB ist praktisch alles Metall (metalness 0,70–0,92) bei
+  sehr dunkler Grundfarbe; Metalle haben keinen diffusen Anteil, ihr Aussehen
+  kommt vollstaendig aus der Reflexion, und die wird mit der Grundfarbe
+  eingefaerbt — bei 0,10 bleibt davon nichts. Der Loader trennt deshalb nach
+  Bauart: **lackierte Bleche sind Dielektrika**, blankes Stahlzeug bleibt
+  metallisch und wird heller. Dazu bekommt jede Sektion einen eigenen Farbton
+  (kuehles Cockpit, neutraler Gang, warmer Frachtraum).
+- **Reflexionen:** Einmal wird an Bord eine Cubemap gerendert und daraus die
+  PMREM-Textur gefiltert — die Verkleidung spiegelt die echten Leuchten und
+  Waende statt einer nachgebauten Kammer.
+- **Schatten:** Drei Raumleuchten werfen Schatten. Weil im Innenraum nichts
+  wandert, wird die Schattenkarte genau **einmal** gezeichnet
+  (`shadowMap.autoUpdate = false`).
+- **Lichtkegel:** Kegelmantel mit Shader statt echtem Volumen, ausgeblendet zur
+  Silhouette und nahe der Kamera — ohne diese beiden Ausblendungen sieht man
+  entweder die harte Kegelkante oder man steht im Nebel.
 - **Zielerfassung:** `T` erfasst den Brocken, der dem Fadenkreuz am naechsten
   liegt; das HUD klammert ihn ein und zeigt Entfernung und Zustand. Aus
   Zielbewegung und Geschossgeschwindigkeit ergibt sich der **Vorhaltepunkt** —
@@ -144,8 +170,9 @@ src/
   combat/HullCollision.ts      Rumpfkollision (Sweep), Huellenschaden
   combat/Effects.ts            Einschlaege und Explosionen (Sprite-Pool)
   ship/RadarScreen.ts          Lebendes Radar auf dem Konsolendisplay
+  ship/LightShafts.ts          Lichtkegel unter den Deckenleuchten
   player/CameraShake.ts        Kamerawackler nach Stoessen
-  render/Postprocessing.ts     Bloom-Pipeline
+  render/Postprocessing.ts     Drei Tiefenbereiche, GTAO, Bloom
   player/SeatedController.ts   Flugsteuerung
   player/PlayerState.ts        State-Machine SEATED <-> WALKING
   player/WalkController.ts     First-Person-Controller im Schiffslokalraum
