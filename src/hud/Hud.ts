@@ -1,5 +1,6 @@
 import { MathUtils, Quaternion, Vector3 } from 'three';
 import type { PerspectiveCamera } from 'three';
+import type { FlightMode } from '../ship/FlightModel';
 import './hud.css';
 
 /** Anzeigemodus: sitzend (Flug-HUD) oder stehend (Gehen). */
@@ -12,7 +13,8 @@ export interface HudState {
   velocity: Vector3;
   speed: number;
   setSpeed: number;
-  assist: boolean;
+  /** Aktueller Flugmodus (Chip rechts unten). */
+  mode: FlightMode;
   fullStop: boolean;
   afterburner: boolean;
   pointerLocked: boolean;
@@ -21,6 +23,13 @@ export interface HudState {
   /** Obergrenze der Sollgeschwindigkeit fuer den Balken. */
   maxSetSpeed: number;
 }
+
+/** Beschriftung des Modus-Chips. */
+const MODE_LABEL: Record<FlightMode, string> = {
+  arcade: 'ARCADE',
+  assist: 'NEWTON · ASSIST',
+  newton: 'NEWTON · FREI',
+};
 
 /** Ab dieser Geschwindigkeit hat der Velocity-Vektor eine sinnvolle Richtung. */
 const MARKER_MIN_SPEED = 1;
@@ -96,7 +105,7 @@ export class Hud {
   /** Letzte gesetzte Texte/Zustaende, um DOM-Schreiben zu sparen. */
   private lastSpeed = -1;
   private lastSet = -1;
-  private lastAssist = '';
+  private lastMode = '';
   private lastBurn = false;
   private lastLocked: boolean | null = null;
 
@@ -126,11 +135,11 @@ export class Hud {
       </div>
 
       <div class="hud__status">
-        <span class="hud__chip" data-assist>ASSIST ON</span>
+        <span class="hud__chip is-on" data-assist>ARCADE</span>
         <span class="hud__chip" data-burn>AB</span>
       </div>
 
-      <div class="hud__keys hud__keys--flight">W/S SET SPEED &middot; Q/E ROLL &middot; A/D STRAFE &middot; SHIFT/CTRL LIFT &middot; X FULL STOP &middot; V ASSIST &middot; TAB BURN &middot; F AUFSTEHEN</div>
+      <div class="hud__keys hud__keys--flight">W/S SET SPEED &middot; Q/E ROLL &middot; A/D STRAFE &middot; SHIFT/CTRL LIFT &middot; X FULL STOP &middot; V FLUGMODUS &middot; TAB BURN &middot; F AUFSTEHEN</div>
       <div class="hud__keys hud__keys--walk">W/A/S/D GEHEN &middot; MAUS UMSEHEN &middot; F AM SITZ HINSETZEN</div>
       <div class="hud__prompt" hidden></div>
       <div class="hud__hint" hidden>KLICKEN ZUM STEUERN</div>
@@ -216,11 +225,11 @@ export class Hud {
       this.barSet.style.left = `${pct.toFixed(1)}%`;
     }
 
-    const assist = state.fullStop ? 'FULL STOP' : state.assist ? 'ASSIST ON' : 'ASSIST OFF';
-    if (assist !== this.lastAssist) {
-      this.lastAssist = assist;
-      this.assistChip.textContent = assist;
-      this.assistChip.classList.toggle('is-on', state.assist && !state.fullStop);
+    const mode = state.fullStop ? 'FULL STOP' : MODE_LABEL[state.mode];
+    if (mode !== this.lastMode) {
+      this.lastMode = mode;
+      this.assistChip.textContent = mode;
+      this.assistChip.classList.toggle('is-on', !state.fullStop && state.mode !== 'newton');
       this.assistChip.classList.toggle('is-warn', state.fullStop);
     }
 

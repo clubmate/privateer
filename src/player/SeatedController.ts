@@ -1,4 +1,4 @@
-import { Vector2 } from 'three';
+import { MathUtils, Vector2 } from 'three';
 import type { Input } from '../core/Input';
 import type { FlightModel } from '../ship/FlightModel';
 
@@ -13,7 +13,7 @@ const KEYS = {
   up: 'ShiftLeft',
   down: 'ControlLeft',
   fullStop: 'KeyX',
-  assist: 'KeyV',
+  mode: 'KeyV',
   afterburner: 'Tab',
 } as const;
 
@@ -26,6 +26,14 @@ export interface SeatedControllerOptions {
   responseExponent: number;
   /** Verzoegerung, bis W/S kontinuierlich weiterzaehlen, in Sekunden. */
   repeatDelay: number;
+  /**
+   * Arcade-Modus: Grad Drehung je Mauspixel. Die Maus steuert dort direkt die
+   * Ausrichtung (wie Zielen in einem Shooter) statt einen stehenden Ausschlag
+   * aufzubauen; die Drehrate deckelt `arcade.turnRate` im FlightModel.
+   */
+  degreesPerPixel: number;
+  /** Glaettung der gemessenen Mausgeschwindigkeit im Arcade-Modus, in Sekunden. */
+  aimSmoothing: number;
 }
 
 const DEFAULT_OPTIONS: SeatedControllerOptions = {
@@ -33,15 +41,21 @@ const DEFAULT_OPTIONS: SeatedControllerOptions = {
   deadzone: 0.06,
   responseExponent: 1.6,
   repeatDelay: 0.3,
+  degreesPerPixel: 0.08,
+  aimSmoothing: 0.035,
 };
 
 /**
  * Uebersetzt Tastatur/Maus in `FlightInputs`.
  *
- * Maus wie in Privateer: die Mausdeltas summieren sich zu einem virtuellen
- * Offset vom Bildschirmzentrum (geclampt auf den Einheitskreis). Der Offset
- * bleibt stehen, wo der Pilot ihn hinschiebt, und erzeugt proportionalen
- * Pitch-/Yaw-Torque. Das HUD zeichnet ihn als Steuerkreuz-Cursor.
+ * **Arcade** (Standard): die Maus dreht das Schiff direkt, Pixel mal
+ * {@link SeatedControllerOptions.degreesPerPixel}; steht die Maus still, steht
+ * auch die Drehung. Das HUD zeigt den aktuellen Steuerbefehl als Cursor.
+ *
+ * **Newton**: Maus wie in Privateer — die Mausdeltas summieren sich zu einem
+ * virtuellen Offset vom Bildschirmzentrum (geclampt auf den Einheitskreis).
+ * Der Offset bleibt stehen, wo der Pilot ihn hinschiebt, und erzeugt
+ * proportionalen Pitch-/Yaw-Torque.
  *
  * `update()` laeuft einmal pro Frame (siehe dort). Ueber `enable()`/`disable()`
  * abschaltbar — AP4 (Walk-Mode) schaltet ihn beim Aufstehen ab und beim
@@ -52,6 +66,8 @@ export class SeatedController {
   /** Virtueller Mausoffset, -1..1 in Einheiten der halben Bildhoehe. */
   private readonly offset = new Vector2();
   private readonly mouseDelta = { x: 0, y: 0 };
+  /** Geglaettete Mausgeschwindigkeit in Pixel/s (nur Arcade). */
+  private readonly aimRate = new Vector2();
   private readonly holdTime = new Map<string, number>();
 
   private enabled = true;
@@ -83,6 +99,7 @@ export class SeatedController {
     if (!this.enabled) return;
     this.enabled = false;
     this.offset.set(0, 0);
+    this.aimRate.set(0, 0);
     this.flight.clearInputs();
     this.holdTime.clear();
   }
@@ -104,7 +121,7 @@ export class SeatedController {
   update(dt: number): void {
     if (!this.enabled) return;
 
-    this.updateMouse();
+    this.updateMouse(dt);
     this.updateSetSpeed(dt);
 
     const i = this.flight.inputs;
@@ -116,10 +133,7 @@ export class SeatedController {
     // Bei Assist AUS ist W/S direkter Schub statt Sollgeschwindigkeit.
     i.main = this.flight.assistEnabled ? 0 : this.axis(KEYS.speedUp, KEYS.speedDown);
 
-    if (this.input.wasPressed(KEYS.assist)) {
-      this.flight.toggleAssist();
-      this.flight.cancelFullStop();
-    }
+    if (this.input.wasPressed(KEYS.mode)) this.flight.cycleMode();
     if (this.input.wasPressed(KEYS.fullStop)) this.flight.requestFullStop();
 
     // Manueller Schub bricht einen laufenden Full Stop ab.
@@ -128,15 +142,50 @@ export class SeatedController {
 
   // ----------------------------------------------------------------- Maus
 
-  private updateMouse(): void {
+  private updateMouse(dt: number): void {
+    const i = this.flight.inputs;
     if (!this.input.pointerLocked) {
       this.offset.set(0, 0);
-      this.flight.inputs.pitch = 0;
-      this.flight.inputs.yaw = 0;
+      i.pitch = 0;
+      i.yaw = 0;
       return;
     }
 
     this.input.consumeMouseDelta(this.mouseDelta);
+    if (this.flight.isArcade) this.updateArcadeAim(dt);
+    else this.updateVirtualStick();
+  }
+
+  /**
+   * Arcade: aus der Mausgeschwindigkeit wird direkt die Drehrate — schnelle
+   * Maus, schnelle Drehung, begrenzt auf Vollausschlag. Ohne Mausbewegung ist
+   * der Befehl null, das Schiff bleibt auf Kurs.
+   *
+   * Gemessen wird die *Geschwindigkeit* (geglaettet), nicht der Frame-Weg:
+   * Bei mehr Bildern als Physikschritten enthaelt ein Frame keinen Schritt,
+   * und ein Weg-pro-Frame-Befehl ginge dort verloren.
+   */
+  private updateArcadeAim(dt: number): void {
+    const step = Math.max(dt, 1e-3);
+    const follow = 1 - Math.exp(-step / Math.max(this.options.aimSmoothing, 1e-4));
+    this.aimRate.x += (this.mouseDelta.x / step - this.aimRate.x) * follow;
+    this.aimRate.y += (this.mouseDelta.y / step - this.aimRate.y) * follow;
+
+    const rate = this.flight.getParams().arcade.turnRate;
+    const gain = MathUtils.degToRad(this.options.degreesPerPixel) / rate;
+
+    const yaw = clamp(this.aimRate.x * gain, -1, 1);
+    const pitch = clamp(-this.aimRate.y * gain, -1, 1); // Maus hoch (dy<0) = Nase hoch
+
+    const i = this.flight.inputs;
+    i.yaw = yaw;
+    i.pitch = pitch;
+    // Fuer das HUD: der Cursor zeigt den aktuellen Steuerbefehl.
+    this.offset.set(yaw, -pitch);
+  }
+
+  /** Newton: aufsummierter Ausschlag, der stehen bleibt (Privateer-Trimmung). */
+  private updateVirtualStick(): void {
     const scale = 1 / this.options.pixelsToFullDeflection;
     this.offset.x += this.mouseDelta.x * scale;
     this.offset.y += this.mouseDelta.y * scale;
@@ -188,4 +237,8 @@ export class SeatedController {
   private axis(positive: string, negative: string): number {
     return (this.input.isDown(positive) ? 1 : 0) - (this.input.isDown(negative) ? 1 : 0);
   }
+}
+
+function clamp(v: number, min: number, max: number): number {
+  return v < min ? min : v > max ? max : v;
 }

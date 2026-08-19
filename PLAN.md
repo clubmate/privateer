@@ -5,11 +5,13 @@ First-Person durchs eigene Schiff laufen können. Three.js + TypeScript + Vite.
 
 ## Kernentscheidungen
 
-- **Flugmodell:** Newtonisch mit Flight-Assist. Echte Trägheit (Position,
-  Velocity, Orientierung, Angular Velocity, Thruster-Kräfte). Flight-Assist
-  (default AN) dämpft Rotation und regelt die Geschwindigkeit auf eine
-  Sollgeschwindigkeit entlang der Schiffsnase (Privateer-Feeling), abschaltbar
-  für vollen Drift.
+- **Flugmodell:** Zwei Modi im selben Modell, `KeyV` schaltet durch.
+  **Arcade** (default): Nase = Flugrichtung, Eingabe ist eine Soll-Drehrate,
+  der Geschwindigkeitsvektor folgt der Nase mit kurzer Zeitkonstante — kein
+  Nachdrehen, kein Drift. **Newton:** echte Trägheit (Position, Velocity,
+  Orientierung, Angular Velocity, Thruster-Kräfte), wahlweise mit Flight-Assist
+  (dämpft Rotation, regelt auf die Sollgeschwindigkeit entlang der Nase,
+  Privateer-Feeling) oder ganz frei.
 - **Nahtloser Innenraum:** Das Cockpit ist Teil des begehbaren Schiffsinneren.
   Eine Szene, keine Szenenwechsel. Kamera ist Kind des Schiffs-Rigs.
 - **Assets:** Schiffsinneres/Cockpit als glTF aus Blender (via MCP). Bis das
@@ -44,12 +46,12 @@ First-Person durchs eigene Schiff laufen können. Three.js + TypeScript + Vite.
 
 **Sitzend (Flug), Pointer Lock:**
 - Maus: Pitch/Yaw (Torque Richtung Maus-Offset vom Zentrum, wie Privateer)
-- `KeyW`/`KeyS`: Sollgeschwindigkeit +/- (bei Assist AN); bei Assist AUS: Schub vor/zurück
+- `KeyW`/`KeyS`: Sollgeschwindigkeit +/- (Arcade/Assist); bei Newton frei: Schub vor/zurück
 - `KeyQ`/`KeyE`: Rollen
 - `KeyA`/`KeyD`: Lateralschub links/rechts
 - `ShiftLeft`/`ControlLeft`: Schub hoch/runter
-- `KeyX`: Full Stop (Assist bremst auf 0)
-- `KeyV`: Flight-Assist an/aus
+- `KeyX`: Full Stop (bremst auf 0)
+- `KeyV`: Flugmodus weiterschalten (Arcade -> Newton+Assist -> Newton frei)
 - `Tab`: Afterburner (Schubfaktor 4, solange gehalten)
 - `KeyF`: Aufstehen
 
@@ -71,11 +73,11 @@ src/
   world/Asteroids.ts        Asteroidenfeld (InstancedMesh) nahe Startposition
   ship/Ship.ts              Schiffs-Rig (Object3D), lädt GLB oder Placeholder, stellt Seat_Pilot/COL_-Meshes bereit
   ship/PlaceholderInterior.ts  Prozeduraler Innenraum nach obigen Konventionen
-  ship/FlightModel.ts       Newtonsche Physik + Flight-Assist + Sollgeschwindigkeit
+  ship/FlightModel.ts       Arcade- und Newton-Flugmodell + Sollgeschwindigkeit
   player/PlayerState.ts     State-Machine: SEATED <-> WALKING
   player/SeatedController.ts  Maussteuerung -> FlightModel-Inputs
   player/WalkController.ts  First-Person-Controller im Schiffslokalraum
-  hud/Hud.ts                DOM-Overlay: Fadenkreuz, Speed/SetSpeed, Prograde-/Retrograde-Marker, Assist-Status, Interaktions-Prompt
+  hud/Hud.ts                DOM-Overlay: Fadenkreuz, Speed/SetSpeed, Prograde-/Retrograde-Marker, Flugmodus, Interaktions-Prompt
 ```
 
 ## Arbeitspakete (je ein Opus-Agent)

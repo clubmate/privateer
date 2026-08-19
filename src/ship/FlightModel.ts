@@ -54,6 +54,37 @@ export interface ShipPhysicsParams {
   setSpeedStep: number;
   /** Schrittweite von W/S beim Halten in m/s pro Sekunde. */
   setSpeedRate: number;
+  /** Kennwerte des Arcade-Modus (siehe {@link ArcadeParams}). */
+  arcade: ArcadeParams;
+}
+
+/**
+ * Arcade-Modus: das Schiff verhaelt sich wie ein Flugzeug im Weltraum statt wie
+ * ein Newtonscher Koerper. Die Nase bestimmt die Flugrichtung, es gibt keinen
+ * Drift und keinen Nachdreh.
+ */
+export interface ArcadeParams {
+  /** Drehrate bei Vollausschlag in rad/s (Pitch/Yaw). */
+  turnRate: number;
+  /** Rollrate bei Vollausschlag in rad/s. */
+  rollRate: number;
+  /** Zeitkonstante, bis die Drehrate der Eingabe folgt, in s. */
+  turnSmoothing: number;
+  /**
+   * Zeitkonstante, mit der der Geschwindigkeitsvektor der Nase folgt, in s.
+   * Klein = klebrig wie ein Jaeger, gross = mehr Drift.
+   */
+  grip: number;
+  /** Laengsbeschleunigung auf die Sollgeschwindigkeit in m/s^2. */
+  accel: number;
+  /** Verzoegerung beim Bremsen in m/s^2. */
+  brake: number;
+  /** Seitlicher/vertikaler Versatz bei Vollausschlag in m/s. */
+  strafeSpeed: number;
+  /** Zielgeschwindigkeit des Nachbrenners in m/s. */
+  boostSpeed: number;
+  /** Beschleunigung des Nachbrenners in m/s^2. */
+  boostAccel: number;
 }
 
 /**
@@ -77,7 +108,29 @@ export const DEFAULT_SHIP_PARAMS: ShipPhysicsParams = {
   maxSpeed: 850,
   setSpeedStep: 10,
   setSpeedRate: 60,
+  arcade: {
+    turnRate: 1.25, // ~72 Grad/s
+    rollRate: 2.2,
+    turnSmoothing: 0.07,
+    grip: 0.25,
+    accel: 70,
+    brake: 110,
+    strafeSpeed: 60,
+    boostSpeed: 780,
+    boostAccel: 160,
+  },
 };
+
+/**
+ * Flugmodi, zyklisch ueber V:
+ *  - `arcade`: Nase = Flugrichtung, kein Drift, straffe Drehraten (Standard).
+ *  - `assist`: Newtonsch mit Flight-Assist (Sollgeschwindigkeit, Drehdaempfung).
+ *  - `newton`: rein Newtonsch, W/S sind direkter Schub.
+ */
+export type FlightMode = 'arcade' | 'assist' | 'newton';
+
+/** Reihenfolge, in der V die Modi durchschaltet. */
+export const FLIGHT_MODE_ORDER: readonly FlightMode[] = ['arcade', 'assist', 'newton'];
 
 /** Unterhalb dieser Bahngeschwindigkeit gilt Full Stop als erledigt. */
 const FULL_STOP_EPSILON = 0.5;
@@ -103,12 +156,14 @@ export class FlightModel {
   /** Eingaben des naechsten Schritts; der Controller schreibt hier hinein. */
   readonly inputs: FlightInputs = createFlightInputs();
 
-  /** Flight-Assist (Rotationsdaempfung + Geschwindigkeitsregelung). */
-  assistEnabled = true;
+  /** Aktueller Flugmodus; Standard ist Arcade. */
+  mode: FlightMode = 'arcade';
   /** Sollgeschwindigkeit entlang der Nase in m/s (0..maxSetSpeed). */
   setSpeed = 0;
 
   private fullStopActive = false;
+  /** Aktuelle Laengsgeschwindigkeit im Arcade-Modus, m/s. */
+  private arcadeSpeed = 0;
 
   private readonly params: ShipPhysicsParams;
   private readonly invQuat = new Quaternion();
@@ -116,6 +171,7 @@ export class FlightModel {
   private readonly axis = new Vector3();
   private readonly velLocal = new Vector3();
   private readonly accelLocal = new Vector3();
+  private readonly velTarget = new Vector3();
 
   constructor(
     private readonly ship: Object3D,
@@ -126,6 +182,15 @@ export class FlightModel {
 
   getParams(): Readonly<ShipPhysicsParams> {
     return this.params;
+  }
+
+  /** True, solange der Modus die Geschwindigkeit regelt (Arcade oder Assist). */
+  get assistEnabled(): boolean {
+    return this.mode !== 'newton';
+  }
+
+  get isArcade(): boolean {
+    return this.mode === 'arcade';
   }
 
   /** Betrag der Bahngeschwindigkeit in m/s. */
@@ -163,10 +228,26 @@ export class FlightModel {
     this.fullStopActive = false;
   }
 
-  /** V: Flight-Assist umschalten. */
-  toggleAssist(): boolean {
-    this.assistEnabled = !this.assistEnabled;
-    return this.assistEnabled;
+  /** V: Flugmodus weiterschalten (Arcade -> Assist -> Newton -> Arcade). */
+  cycleMode(): FlightMode {
+    const next = FLIGHT_MODE_ORDER[(FLIGHT_MODE_ORDER.indexOf(this.mode) + 1) % FLIGHT_MODE_ORDER.length];
+    this.setMode(next);
+    return this.mode;
+  }
+
+  /**
+   * Modus setzen. Beim Wechsel wird der interne Zustand angeglichen, damit die
+   * Geschwindigkeit nicht springt: Arcade uebernimmt die aktuelle Vorwaerts-
+   * geschwindigkeit, Newton faengt mit dem vorhandenen Vektor an.
+   */
+  setMode(mode: FlightMode): void {
+    if (mode === this.mode) return;
+    this.mode = mode;
+    this.fullStopActive = false;
+    if (mode === 'arcade') {
+      this.arcadeSpeed = Math.max(this.getForwardSpeed(), 0);
+      this.setSpeed = clamp(this.arcadeSpeed, 0, this.params.maxSetSpeed);
+    }
   }
 
   /** Alle Eingaben nullen (z. B. beim Verlassen des Sitzes). */
@@ -183,8 +264,79 @@ export class FlightModel {
 
   /** Ein Physikschritt mit festem dt. */
   update(dt: number): void {
+    if (this.mode === 'arcade') {
+      this.integrateArcadeRotation(dt);
+      this.integrateArcadeTranslation(dt);
+      return;
+    }
     this.integrateRotation(dt);
     this.integrateTranslation(dt);
+  }
+
+  // ------------------------------------------------------------------ Arcade
+
+  /**
+   * Drehung im Arcade-Modus: die Eingabe ist eine *Sollrate*, keine
+   * Beschleunigung. Die Rate folgt ihr mit kurzer Zeitkonstante, ohne
+   * Eingabe steht die Drehung sofort wieder still.
+   */
+  private integrateArcadeRotation(dt: number): void {
+    const a = this.params.arcade;
+    const i = this.inputs;
+    const w = this.angularVelocity;
+
+    const follow = 1 - Math.exp(-dt / Math.max(a.turnSmoothing, 1e-4));
+    w.x += (clamp(i.pitch, -1, 1) * a.turnRate - w.x) * follow;
+    w.y += (-clamp(i.yaw, -1, 1) * a.turnRate - w.y) * follow;
+    w.z += (-clamp(i.roll, -1, 1) * a.rollRate - w.z) * follow;
+
+    const speed = w.length();
+    const angle = speed * dt;
+    if (angle > 1e-9) {
+      this.axis.copy(w).normalize();
+      this.stepQuat.setFromAxisAngle(this.axis, angle);
+      this.ship.quaternion.multiply(this.stepQuat).normalize();
+    }
+  }
+
+  /**
+   * Translation im Arcade-Modus: eine skalare Laengsgeschwindigkeit auf der
+   * Nase plus seitlicher Versatz. Der Geschwindigkeitsvektor zieht mit der
+   * Zeitkonstante `grip` hinter der Nase her — das gibt Kurven etwas Gewicht,
+   * ohne echten Drift.
+   */
+  private integrateArcadeTranslation(dt: number): void {
+    const p = this.params;
+    const a = p.arcade;
+    const i = this.inputs;
+
+    if (i.afterburner) this.fullStopActive = false;
+
+    const target = i.afterburner ? a.boostSpeed : this.fullStopActive ? 0 : this.setSpeed;
+    const rate = i.afterburner ? a.boostAccel : target > this.arcadeSpeed ? a.accel : a.brake;
+    const delta = target - this.arcadeSpeed;
+    this.arcadeSpeed += clamp(delta, -rate * dt, rate * dt);
+
+    if (this.fullStopActive && Math.abs(this.arcadeSpeed) < FULL_STOP_EPSILON) {
+      this.arcadeSpeed = 0;
+      this.fullStopActive = false;
+    }
+
+    // Sollgeschwindigkeit im Schiffssystem -> Welt.
+    this.velTarget.set(
+      clamp(i.lateral, -1, 1) * a.strafeSpeed,
+      clamp(i.vertical, -1, 1) * a.strafeSpeed,
+      -this.arcadeSpeed,
+    );
+    this.velTarget.applyQuaternion(this.ship.quaternion);
+
+    const follow = 1 - Math.exp(-dt / Math.max(a.grip, 1e-4));
+    this.velocity.lerp(this.velTarget, follow);
+
+    const speed = this.velocity.length();
+    if (speed > p.maxSpeed) this.velocity.multiplyScalar(p.maxSpeed / speed);
+
+    this.ship.position.addScaledVector(this.velocity, dt);
   }
 
   // ------------------------------------------------------------------ Drehung

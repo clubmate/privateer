@@ -20,6 +20,7 @@ import { SeatedController } from './player/SeatedController';
 import { WalkController } from './player/WalkController';
 import { PlayerState } from './player/PlayerState';
 import { Hud } from './hud/Hud';
+import { createPostprocessing } from './render/Postprocessing';
 
 const container = document.getElementById('app');
 if (!container) throw new Error('#app fehlt in index.html');
@@ -41,6 +42,10 @@ const scene = new Scene();
 // Frustum — moeglich durch logarithmicDepthBuffer.
 const camera = new PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.05, 1e7);
 camera.rotation.order = 'YXZ';
+
+// Bloom laeuft ueber einen EffectComposer; das Canvas selbst braucht dann kein
+// Antialiasing mehr, das uebernimmt das multisampelte Zwischenziel.
+const post = createPostprocessing(renderer, scene, camera);
 
 // --------------------------------------------------------------------- Welt
 const sun = new Sun(new Vector3(0.8, 0.3, -0.1).normalize());
@@ -138,14 +143,14 @@ function render(dt: number): void {
   starfield.update(cameraWorldPos);
   sun.update(cameraWorldPos);
 
-  renderer.render(scene, camera);
+  post.render();
 
   hud.update({
     camera,
     velocity: flight.velocity,
     speed: flight.getSpeed(),
     setSpeed: flight.setSpeed,
-    assist: flight.assistEnabled,
+    mode: flight.mode,
     fullStop: flight.fullStop,
     afterburner: flight.inputs.afterburner,
     pointerLocked: input.pointerLocked,
@@ -172,6 +177,7 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
+  post.setSize(window.innerWidth, window.innerHeight);
   starfield.setPixelRatio(renderer.getPixelRatio());
 });
 
