@@ -256,3 +256,94 @@
   color: var(--hud-green);
   border-color: var(--hud-green-dim);
 }
+
+/* ------------------------------------------------------- Ziel und Vorhalt */
+
+.hud__target,
+.hud__lead {
+  position: absolute;
+  left: 0;
+  top: 0;
+  margin-left: -0.5px;
+  margin-top: -0.5px;
+  color: var(--hud-warn);
+  will-change: transform;
+}
+
+.hud__lead {
+  transform-origin: center;
+  margin-left: -15px;
+  margin-top: -15px;
+  opacity: 0.9;
+}
+
+/* Klammer: vier Ecken, kein geschlossener Rahmen — verdeckt weniger. */
+.hud__target-box {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  opacity: 0.85;
+  clip-path: polygon(
+    0 0, 30% 0, 30% 6%, 6% 6%, 6% 30%, 0 30%,
+    0 70%, 6% 70%, 6% 94%, 30% 94%, 30% 100%, 0 100%,
+    100% 100%, 70% 100%, 70% 94%, 94% 94%, 94% 70%, 100% 70%,
+    100% 30%, 94% 30%, 94% 6%, 70% 6%, 70% 0, 100% 0
+  );
+}
+
+.hud__target.is-clamped .hud__target-box {
+  opacity: 0.4;
+}
+
+.hud__target-info {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, 26px);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.hud__target-bar {
+  display: inline-block;
+  width: 42px;
+  height: 4px;
+  border: 1px solid currentColor;
+  opacity: 0.9;
+}
+
+.hud__target-bar > i {
+  display: block;
+  height: 100%;
+  background: currentColor;
+}
+
+/* ------------------------------------------------------------- Schaden */
+
+.hud__damage {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(255, 40, 40, 0) 45%,
+    rgba(255, 40, 40, 0.42) 100%
+  );
+}
+
+.hud__value.is-warn {
+  color: var(--hud-warn);
+}
+
+/* Beim Gehen bleiben Zielklammer und Vorhalt aus. */
+.hud--walking .hud__target,
+.hud--walking .hud__lead {
+  display: none;
+}

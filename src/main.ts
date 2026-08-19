@@ -22,6 +22,10 @@ import { PlayerState } from './player/PlayerState';
 import { Hud } from './hud/Hud';
 import { Effects } from './combat/Effects';
 import { Weapons } from './combat/Weapons';
+import { Targeting } from './combat/Targeting';
+import { HullCollision } from './combat/HullCollision';
+import { CameraShake } from './player/CameraShake';
+import { RadarScreen } from './ship/RadarScreen';
 import { createPostprocessing } from './render/Postprocessing';
 
 const container = document.getElementById('app');
@@ -68,6 +72,10 @@ const ship = new Ship();
 // Waffen: Geschosse und Effekte leben in Weltkoordinaten, nicht am Schiff.
 const effects = new Effects();
 const weapons = new Weapons(asteroids, effects);
+const targeting = new Targeting();
+const hull = new HullCollision(asteroids, effects);
+const shake = new CameraShake();
+const radar = new RadarScreen();
 
 scene.add(starfield, sun, planet, asteroids, ship, weapons.mesh, effects);
 
@@ -103,6 +111,8 @@ pmrem.dispose();
 loadShipInterior(`${import.meta.env.BASE_URL}models/ship-interior.glb`, interiorEnvironment)
   .then((interior) => {
     ship.setInterior(interior);
+    // Das MFD zeigt ab jetzt echte Kontakte statt eines gemalten Standbilds.
+    radar.attachTo(interior);
     // Kamera haengt noch am alten Sitzmarker und muss neu angebunden werden;
     // ausserdem brauchen die Kollisionsboxen die neuen COL_-Meshes.
     player.refreshInterior();
@@ -125,12 +135,14 @@ function applyFloatingOrigin(): void {
   asteroids.position.sub(originOffset);
   weapons.shift(originOffset);
   effects.shift(originOffset);
+  hull.shift(originOffset);
   // Starfield und Sonne folgen der Kamera und brauchen keine Verschiebung.
 }
 
 // ---------------------------------------------------------------- Game-Loop
 const time = new Time();
 const cameraWorldPos = new Vector3();
+const forward = new Vector3();
 
 /** Physik-Hook, fester Timestep (120 Hz). */
 function fixedUpdate(dt: number): void {
@@ -138,6 +150,10 @@ function fixedUpdate(dt: number): void {
   // Laufphysik im Schiffslokalraum — unabhaengig davon, wohin das Schiff fliegt.
   player.fixedUpdate(dt);
   weapons.update(dt, ship, flight.velocity);
+  // Erst fliegen, dann anecken: die Kollision korrigiert die Position dieses
+  // Schrittes und wirft die Geschwindigkeit zurueck.
+  const impact = hull.update(dt, ship, flight.velocity);
+  if (impact) shake.add(0.25 + impact.damage * 3);
   effects.update(dt);
   applyFloatingOrigin();
 }
@@ -146,8 +162,24 @@ function render(dt: number): void {
   asteroids.update(dt);
   planet.update(dt);
 
+  const target = targeting.update(
+    asteroids,
+    ship.position,
+    flight.velocity,
+    weapons.getParams().boltSpeed,
+  );
+  radar.update(dt, {
+    origin: ship.position,
+    orientation: ship.quaternion,
+    asteroids,
+    targetIndex: targeting.getIndex(),
+  });
+
   // Kamerapose (Sitz oder Gehen inkl. Blend) vor der Matrixaktualisierung.
   player.updateCamera();
+  // Wackler kommt nach der Pose — die wird jeden Frame neu gesetzt.
+  shake.update(dt);
+  shake.applyTo(camera);
   scene.updateMatrixWorld();
   camera.getWorldPosition(cameraWorldPos);
   starfield.update(cameraWorldPos);
@@ -168,6 +200,9 @@ function render(dt: number): void {
     maxSetSpeed: flight.getParams().maxSetSpeed,
     kills: weapons.kills,
     sinceHit: weapons.getTimeSinceHit(),
+    target,
+    hull: hull.integrity,
+    sinceImpact: hull.sinceImpact,
   });
 }
 
@@ -178,6 +213,11 @@ renderer.setAnimationLoop(() => {
   seated.update(time.frameDelta);
   // Modewechsel (KeyF) und Umsehen beim Gehen: ebenfalls einmal pro Frame.
   player.update(time.frameDelta);
+  // Zielerfassung weiterschalten (nur sitzend).
+  if (!player.isWalking && input.wasPressed('KeyT')) {
+    forward.set(0, 0, -1).applyQuaternion(ship.quaternion);
+    targeting.cycle(asteroids, ship.position, forward);
+  }
   // Gefeuert wird nur sitzend und mit gefangenem Zeiger.
   weapons.setTrigger(
     !player.isWalking &&
@@ -201,5 +241,8 @@ window.addEventListener('resize', () => {
 
 // Debug-Zugriff fuer Tests und die folgenden Arbeitspakete.
 Object.assign(window as unknown as Record<string, unknown>, {
-  __privateer: { ship, flight, seated, walk, player, hud, camera, input, scene, weapons, effects, asteroids },
+  __privateer: {
+    ship, flight, seated, walk, player, hud, camera, input, scene,
+    weapons, effects, asteroids, targeting, hull, shake, radar,
+  },
 });

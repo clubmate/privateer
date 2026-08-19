@@ -38,6 +38,7 @@ QWERTY sind also identisch.
 | --- | --- |
 | Maus | Pitch/Yaw — im Arcade-Modus dreht das Schiff direkt mit der Maus, im Newton-Modus wirkt der Offset vom Bildzentrum als stehendes Steuerkreuz (Privateer-Stil) |
 | Linke Maustaste / `Leertaste` | **Feuern** — beide Bordkanonen, Konvergenz bei 900 m |
+| `T` | Ziel erfassen bzw. weiterschalten (naechstes im Fadenkreuz) |
 | `W` / `S` | Sollgeschwindigkeit hoch/runter (Newton frei: Haupt-/Retroschub) |
 | `Q` / `E` | Rollen links/rechts |
 | `A` / `D` | Lateralschub links/rechts |
@@ -72,12 +73,29 @@ weiterfliegt.
   Physik-Timestep mit 120 Hz, Rendern mit variabler Framerate.
 - **Bild:** Bloom ueber einen `EffectComposer` (Leuchtstreifen, Displays, Sonne);
   das Antialiasing macht das multisampelte Zwischenziel.
+- **Zielerfassung:** `T` erfasst den Brocken, der dem Fadenkreuz am naechsten
+  liegt; das HUD klammert ihn ein und zeigt Entfernung und Zustand. Aus
+  Zielbewegung und Geschossgeschwindigkeit ergibt sich der **Vorhaltepunkt** —
+  gerechnet wird mit der *Relativ*geschwindigkeit, weil das Geschoss die Bahn
+  des eigenen Schiffs erbt.
+- **Radar:** Der rechte Konsolenscreen im Cockpit zeigt die echten Kontakte in
+  der Draufsicht (Nase oben, Strich nach oben/unten fuer den Hoehenunterschied,
+  erfasstes Ziel hervorgehoben) — kein gemaltes Standbild, sondern ein
+  Canvas, das 15-mal je Sekunde neu gezeichnet wird.
+- **Rumpfkollision:** Getestet wird als *Sweep* ueber den Schrittweg statt als
+  Ueberlappung an der neuen Position — bei 500 m/s legt das Schiff je
+  Physikschritt gut vier Meter zurueck und wuerde kleine Brocken sonst
+  ueberspringen. Ein Treffer schiebt das Schiff auf die Beruehrungsstelle
+  zurueck, wirft die Geschwindigkeit zurueck, kostet Huelle und laesst die
+  Kamera wackeln; kleine Brocken zerbrechen dabei. Die Huelle repariert sich
+  langsam selbst, solange es keine Station zum Andocken gibt.
 - **Bordkanonen:** Zwei Muendungen an den Flanken feuern abwechselnd. Die
   Geschosse leben in Weltkoordinaten (nicht am Schiff), damit sie stehen
   bleiben, wenn das Schiff wegdreht, und wandern beim Floating-Origin-Sprung
   mit. Treffer laufen als Kugeltest gegen die Instanzen des Asteroidenfeldes;
   grosse Brocken brauchen mehrere Treffer, zerstoerte wachsen nach 25 s an
-  anderer Stelle nach.
+  anderer Stelle nach. Die Brocken driften dabei mit wenigen m/s und kehren an
+  der Feldgrenze um.
 - **Innenraumoberflaechen:** Das GLB bringt keine einzige Textur mit. Blech-,
   Verschleiss- und Gitterrostkacheln entstehen zur Laufzeit als Hoehenfeld,
   aus dem Normal-, Rauheits- und Schmutzkanal abgeleitet werden; die UVs kommen
@@ -122,7 +140,11 @@ src/
   ship/InteriorScreens.ts      Canvas-Texturen fuer die Cockpit-Displays
   ship/InteriorSurfaces.ts     Prozedurale Blech-/Gitterkacheln (Normal, Rauheit)
   combat/Weapons.ts            Bordkanonen, Geschosse, Trefferaufloesung
+  combat/Targeting.ts          Zielerfassung und Vorhalterechnung
+  combat/HullCollision.ts      Rumpfkollision (Sweep), Huellenschaden
   combat/Effects.ts            Einschlaege und Explosionen (Sprite-Pool)
+  ship/RadarScreen.ts          Lebendes Radar auf dem Konsolendisplay
+  player/CameraShake.ts        Kamerawackler nach Stoessen
   render/Postprocessing.ts     Bloom-Pipeline
   player/SeatedController.ts   Flugsteuerung
   player/PlayerState.ts        State-Machine SEATED <-> WALKING
@@ -130,6 +152,21 @@ src/
   player/ShipCollider.ts       Boxen aus den COL_-Meshes, Kugel-gegen-Box
   hud/                         DOM-Overlay
 ```
+
+## Tests
+
+```bash
+npm test          # einmal durchlaufen
+npm run test:watch
+```
+
+Getestet wird die Logik, nicht das Bild: Flugmodell (Drehraten, Full Stop,
+Moduswechsel, Drift), Asteroidenfeld (Drift, Segmenttreffer, Zerstoerung,
+Nachwuchs), Waffen (Feuerrate, Treffer, Origin-Sprung), Rumpfkollision
+(Durchschlaege, Rueckprall, Schaden), Vorhalterechnung und die Radarabbildung.
+Module, die ein Canvas oder WebGL brauchen, bleiben bewusst aussen vor; die
+Waffen haengen deshalb nur an der Schnittstelle `ImpactSink`, nicht am
+Effekt-Pool. `npm run build` laeuft die Tests mit.
 
 ## Weiterlesen
 

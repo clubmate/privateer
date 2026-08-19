@@ -21,6 +21,8 @@ export interface AsteroidOptions {
   seed: number;
   /** Sekunden, bis ein zerstoerter Brocken andernorts nachwaechst. */
   respawnDelay: number;
+  /** Hoechste Eigengeschwindigkeit eines Brockens in m/s. */
+  maxDrift: number;
 }
 
 /** Treffer eines Segmenttests gegen das Feld. */
@@ -43,7 +45,14 @@ const DEFAULTS: AsteroidOptions = {
   maxRadius: 50,
   seed: 4711,
   respawnDelay: 25,
+  maxDrift: 6,
 };
+
+/**
+ * Ab diesem Vielfachen des Aussenradius kehrt ein driftender Brocken um.
+ * Ohne diese Grenze wandert das Feld auf Dauer auseinander.
+ */
+const DRIFT_BOUNDS = 1.15;
 
 /**
  * Bounding-Radius der Brockengeometrie relativ zur Instanzskalierung. Die
@@ -92,9 +101,13 @@ export class Asteroids extends InstancedMesh<IcosahedronGeometry, MeshStandardMa
   private readonly rotations: Quaternion[] = [];
   private readonly axes: Vector3[] = [];
   private readonly speeds: number[] = [];
+  /** Eigenbewegung je Brocken in m/s (Feldkoordinaten). */
+  private readonly velocities: Vector3[] = [];
   private readonly scales: number[] = [];
   /** Verbleibende Trefferpunkte; 0 = zerstoert und unsichtbar. */
   private readonly hitpoints: number[] = [];
+  /** Trefferpunkte im unbeschaedigten Zustand (fuer die Zielanzeige). */
+  private readonly maxHitpoints: number[] = [];
   /** Restzeit bis zum Nachwachsen in Sekunden (nur fuer zerstoerte Brocken). */
   private readonly respawn: number[] = [];
 
@@ -149,8 +162,15 @@ export class Asteroids extends InstancedMesh<IcosahedronGeometry, MeshStandardMa
       color.setRGB(shade * (1 + warm), shade * (1 + warm * 0.5), shade * (1 - warm * 0.35));
       this.setColorAt(i, color);
 
-      this.hitpoints.push(hitpointsFor(this.scales[i]!));
+      const hp = hitpointsFor(this.scales[i]!);
+      this.hitpoints.push(hp);
+      this.maxHitpoints.push(hp);
       this.respawn.push(0);
+      this.velocities.push(
+        new Vector3(rng() * 2 - 1, (rng() * 2 - 1) * 0.4, rng() * 2 - 1)
+          .normalize()
+          .multiplyScalar(o.maxDrift * Math.pow(rng(), 1.5)),
+      );
     }
 
     this.writeMatrices();
@@ -167,8 +187,24 @@ export class Asteroids extends InstancedMesh<IcosahedronGeometry, MeshStandardMa
       }
       this.tmpQuat.setFromAxisAngle(this.axes[i]!, this.speeds[i]! * dt);
       this.rotations[i]!.premultiply(this.tmpQuat).normalize();
+      this.drift(i, dt);
     }
     this.writeMatrices();
+  }
+
+  /** Lebt der Brocken noch? */
+  isAlive(index: number): boolean {
+    return this.hitpoints[index]! > 0;
+  }
+
+  /** Zustand 0..1 fuer die Zielanzeige. */
+  getIntegrity(index: number): number {
+    return Math.max(this.hitpoints[index]! / this.maxHitpoints[index]!, 0);
+  }
+
+  /** Eigenbewegung eines Brockens in m/s (Welt- = Feldrichtung). */
+  getVelocity(index: number, out: Vector3): Vector3 {
+    return out.copy(this.velocities[index]!);
   }
 
   /** Trefferradius eines Brockens in Metern. */
@@ -185,8 +221,11 @@ export class Asteroids extends InstancedMesh<IcosahedronGeometry, MeshStandardMa
    * Erster Brocken, den die Strecke `from` -> `from + direction * length`
    * trifft (Kugeltest gegen den Umriss). `null`, wenn nichts im Weg liegt.
    * Koordinaten in Weltkoordinaten; das Ergebnisobjekt wird wiederverwendet.
+   *
+   * `padding` vergroessert jeden Brocken — damit wird aus dem Strahlentest der
+   * Sweep einer Kugel, wie ihn die Rumpfkollision braucht.
    */
-  hitSegment(from: Vector3, direction: Vector3, length: number): AsteroidHit | null {
+  hitSegment(from: Vector3, direction: Vector3, length: number, padding = 0): AsteroidHit | null {
     let bestDistance = length;
     let bestIndex = -1;
 
@@ -196,7 +235,7 @@ export class Asteroids extends InstancedMesh<IcosahedronGeometry, MeshStandardMa
       // Strecke im Feldsystem betrachten (das Feld ist nur verschoben).
       this.tmpVec.copy(this.positions[i]!).add(this.position).sub(from);
       const along = this.tmpVec.dot(direction);
-      const radius = this.getRadius(i);
+      const radius = this.getRadius(i) + padding;
       if (along < -radius || along > bestDistance + radius) continue;
 
       const perpSq = this.tmpVec.lengthSq() - along * along;
@@ -239,6 +278,24 @@ export class Asteroids extends InstancedMesh<IcosahedronGeometry, MeshStandardMa
     return true;
   }
 
+  /**
+   * Eigenbewegung eines Brockens fortschreiben. An der Feldgrenze kehrt die
+   * radiale Komponente um, damit das Feld nicht langsam ausduennt.
+   */
+  private drift(index: number, dt: number): void {
+    const position = this.positions[index]!;
+    const velocity = this.velocities[index]!;
+    position.addScaledVector(velocity, dt);
+
+    const limit = this.options.outerRadius * DRIFT_BOUNDS;
+    const distance = position.length();
+    if (distance <= limit || distance === 0) return;
+
+    this.tmpVec.copy(position).divideScalar(distance); // Aussennormale
+    const radial = velocity.dot(this.tmpVec);
+    if (radial > 0) velocity.addScaledVector(this.tmpVec, -2 * radial);
+  }
+
   /** Zerstoerten Brocken an neuer Stelle wiederbeleben. */
   private reseed(index: number): void {
     const o = this.options;
@@ -254,7 +311,12 @@ export class Asteroids extends InstancedMesh<IcosahedronGeometry, MeshStandardMa
     const t = Math.pow(rng(), 2.6);
     this.scales[index] = o.minRadius + (o.maxRadius - o.minRadius) * t;
     this.hitpoints[index] = hitpointsFor(this.scales[index]!);
+    this.maxHitpoints[index] = this.hitpoints[index]!;
     this.respawn[index] = 0;
+    this.velocities[index]!
+      .set(rng() * 2 - 1, (rng() * 2 - 1) * 0.4, rng() * 2 - 1)
+      .normalize()
+      .multiplyScalar(o.maxDrift * Math.pow(rng(), 1.5));
 
     const shade = 0.3 + rng() * 0.5;
     const warm = rng() * 0.12;

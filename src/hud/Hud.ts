@@ -1,6 +1,7 @@
 import { MathUtils, Quaternion, Vector3 } from 'three';
 import type { PerspectiveCamera } from 'three';
 import type { FlightMode } from '../ship/FlightModel';
+import type { TargetInfo } from '../combat/Targeting';
 import './hud.css';
 
 /** Anzeigemodus: sitzend (Flug-HUD) oder stehend (Gehen). */
@@ -26,6 +27,12 @@ export interface HudState {
   kills: number;
   /** Sekunden seit dem letzten Treffer (blitzt kurz im Fadenkreuz auf). */
   sinceHit: number;
+  /** Erfasstes Ziel, oder `null`. */
+  target: TargetInfo | null;
+  /** Huellenintegritaet 0..1. */
+  hull: number;
+  /** Sekunden seit dem letzten Zusammenstoss (roter Rand). */
+  sinceImpact: number;
 }
 
 /** Beschriftung des Modus-Chips. */
@@ -37,6 +44,16 @@ const MODE_LABEL: Record<FlightMode, string> = {
 
 /** So lange leuchtet das Fadenkreuz nach einem Treffer auf, in Sekunden. */
 const HIT_FLASH_DURATION = 0.18;
+
+/** So lange leuchtet der Schadensrand nach einem Zusammenstoss, in Sekunden. */
+const DAMAGE_FLASH_DURATION = 0.6;
+
+/** Kleinste und groesste Kantenlaenge der Zielklammer in Pixeln. */
+const TARGET_BOX_MIN = 34;
+const TARGET_BOX_MAX = 260;
+
+/** Ab diesem Zustand gilt die Huelle als kritisch. */
+const HULL_WARN = 0.35;
 
 /** Ab dieser Geschwindigkeit hat der Velocity-Vektor eine sinnvolle Richtung. */
 const MARKER_MIN_SPEED = 1;
@@ -51,6 +68,12 @@ const CROSSHAIR_SVG = `
   <circle cx="36" cy="36" r="1.6" fill="currentColor"/>
   <path d="M36 4v14M36 54v14M4 36h14M54 36h14" stroke="currentColor" stroke-width="1.5"/>
   <path d="M14 22v-8h8M58 22v-8h-8M14 50v8h8M58 50v8h-8" stroke="currentColor" stroke-width="1" opacity="0.5"/>
+</svg>`;
+
+const LEAD_SVG = `
+<svg width="30" height="30" viewBox="0 0 30 30" fill="none">
+  <circle cx="15" cy="15" r="9" stroke="currentColor" stroke-width="1.6" stroke-dasharray="3 3"/>
+  <circle cx="15" cy="15" r="2" fill="currentColor"/>
 </svg>`;
 
 const CURSOR_SVG = `
@@ -92,6 +115,13 @@ export class Hud {
   private readonly prograde: HTMLDivElement;
   private readonly retrograde: HTMLDivElement;
   private readonly center: HTMLDivElement;
+  private readonly target: HTMLDivElement;
+  private readonly targetBox: HTMLDivElement;
+  private readonly targetRange: HTMLSpanElement;
+  private readonly targetIntegrity: HTMLElement;
+  private readonly lead: HTMLDivElement;
+  private readonly damage: HTMLDivElement;
+  private readonly hullValue: HTMLSpanElement;
   private readonly killsValue: HTMLSpanElement;
   private readonly speedValue: HTMLSpanElement;
   private readonly setValue: HTMLSpanElement;
@@ -109,6 +139,7 @@ export class Hud {
   private readonly invQuat = new Quaternion();
   private readonly dir = new Vector3();
   private readonly local = new Vector3();
+  private readonly cameraPosition = new Vector3();
   private readonly proj: Projection = { x: 0, y: 0, clamped: false };
 
   /** Letzte gesetzte Texte/Zustaende, um DOM-Schreiben zu sparen. */
@@ -116,6 +147,7 @@ export class Hud {
   private lastSet = -1;
   private lastMode = '';
   private lastKills = -1;
+  private lastHull = -1;
   private lastHitFlash: boolean | null = null;
   private lastBurn = false;
   private lastLocked: boolean | null = null;
@@ -127,6 +159,14 @@ export class Hud {
       <div class="hud__ring"></div>
       <div class="hud__center">${CROSSHAIR_SVG}</div>
       <div class="hud__cursor">${CURSOR_SVG}</div>
+      <div class="hud__target" hidden>
+        <div class="hud__target-box"></div>
+        <div class="hud__target-info">
+          <span data-target-range>0 M</span>
+          <span class="hud__target-bar"><i data-target-integrity></i></span>
+        </div>
+      </div>
+      <div class="hud__lead" hidden>${LEAD_SVG}</div>
       <div class="hud__marker hud__marker--pro" hidden>${PROGRADE_SVG}</div>
       <div class="hud__marker hud__marker--retro" hidden>${RETROGRADE_SVG}</div>
 
@@ -144,6 +184,10 @@ export class Hud {
           <div class="hud__bar-set" data-setmark></div>
         </div>
         <div class="hud__row">
+          <span class="hud__label">HUELLE</span>
+          <span class="hud__value" data-hull>100%</span>
+        </div>
+        <div class="hud__row">
           <span class="hud__label">KILLS</span>
           <span class="hud__value" data-kills>0</span>
         </div>
@@ -154,14 +198,22 @@ export class Hud {
         <span class="hud__chip" data-burn>AB</span>
       </div>
 
-      <div class="hud__keys hud__keys--flight">MAUS/LEER FEUERN &middot; W/S SET SPEED &middot; Q/E ROLL &middot; A/D STRAFE &middot; SHIFT/CTRL LIFT &middot; X FULL STOP &middot; V FLUGMODUS &middot; TAB BURN &middot; F AUFSTEHEN</div>
+      <div class="hud__keys hud__keys--flight">MAUS/LEER FEUERN &middot; T ZIEL &middot; W/S SET SPEED &middot; Q/E ROLL &middot; A/D STRAFE &middot; SHIFT/CTRL LIFT &middot; X FULL STOP &middot; V FLUGMODUS &middot; TAB BURN &middot; F AUFSTEHEN</div>
       <div class="hud__keys hud__keys--walk">W/A/S/D GEHEN &middot; MAUS UMSEHEN &middot; F AM SITZ HINSETZEN</div>
+      <div class="hud__damage"></div>
       <div class="hud__prompt" hidden></div>
       <div class="hud__hint" hidden>KLICKEN ZUM STEUERN</div>
     `;
     parent.appendChild(this.root);
 
     this.center = this.require('.hud__center');
+    this.target = this.require('.hud__target');
+    this.targetBox = this.require('.hud__target-box');
+    this.targetRange = this.require('[data-target-range]');
+    this.targetIntegrity = this.require('[data-target-integrity]');
+    this.lead = this.require('.hud__lead');
+    this.damage = this.require('.hud__damage');
+    this.hullValue = this.require('[data-hull]');
     this.killsValue = this.require('[data-kills]');
     this.cursor = this.require('.hud__cursor');
     this.ring = this.require('.hud__ring');
@@ -195,6 +247,10 @@ export class Hud {
   setMode(mode: HudMode): void {
     if (this.mode === mode) return;
     this.mode = mode;
+    if (mode === 'walking') {
+      this.target.hidden = true;
+      this.lead.hidden = true;
+    }
     this.root.classList.toggle('hud--walking', mode === 'walking');
   }
 
@@ -218,6 +274,7 @@ export class Hud {
     this.updateReadouts(state);
     this.updateCursor(state);
     this.updateMarkers(state);
+    this.updateTarget(state);
 
     if (this.lastLocked !== state.pointerLocked) {
       this.lastLocked = state.pointerLocked;
@@ -250,6 +307,17 @@ export class Hud {
       this.assistChip.classList.toggle('is-warn', state.fullStop);
     }
 
+    const hull = Math.round(state.hull * 100);
+    if (hull !== this.lastHull) {
+      this.lastHull = hull;
+      this.hullValue.textContent = `${hull}%`;
+      this.hullValue.classList.toggle('is-warn', state.hull < HULL_WARN);
+    }
+
+    // Roter Rand direkt nach einem Zusammenstoss; klingt weich aus.
+    const damage = Math.max(0, 1 - state.sinceImpact / DAMAGE_FLASH_DURATION);
+    this.damage.style.opacity = damage.toFixed(3);
+
     if (state.kills !== this.lastKills) {
       this.lastKills = state.kills;
       this.killsValue.textContent = `${state.kills}`;
@@ -265,6 +333,51 @@ export class Hud {
       this.lastBurn = state.afterburner;
       this.burnChip.textContent = state.afterburner ? 'AFTERBURNER' : 'AB';
       this.burnChip.classList.toggle('is-warn', state.afterburner);
+    }
+  }
+
+  /**
+   * Zielklammer und Vorhaltemarke setzen. Die Klammer skaliert mit der
+   * scheinbaren Groesse des Brockens, damit sie ihn wirklich einrahmt.
+   */
+  private updateTarget(state: HudState): void {
+    const target = state.target;
+    if (!target || this.mode === 'walking') {
+      this.target.hidden = true;
+      this.lead.hidden = true;
+      return;
+    }
+
+    state.camera.getWorldPosition(this.cameraPosition);
+
+    this.dir.subVectors(target.position, this.cameraPosition).normalize();
+    const box = this.project(this.dir, state.camera);
+    this.target.hidden = false;
+    this.target.classList.toggle('is-clamped', box.clamped);
+    this.target.style.transform = `translate(${box.x.toFixed(1)}px, ${box.y.toFixed(1)}px)`;
+
+    const tanHalf = Math.tan(MathUtils.degToRad(state.camera.fov) * 0.5);
+    const size = MathUtils.clamp(
+      ((target.radius / Math.max(target.distance, 1)) / tanHalf) * this.height,
+      TARGET_BOX_MIN,
+      TARGET_BOX_MAX,
+    );
+    this.targetBox.style.width = `${size.toFixed(0)}px`;
+    this.targetBox.style.height = `${size.toFixed(0)}px`;
+
+    this.targetRange.textContent =
+      target.distance >= 1000
+        ? `${(target.distance / 1000).toFixed(2)} KM`
+        : `${Math.round(target.distance)} M`;
+    this.targetIntegrity.style.width = `${(target.integrity * 100).toFixed(0)}%`;
+
+    // Vorhaltemarke nur zeigen, wenn sie sichtbar vom Ziel abweicht.
+    this.dir.subVectors(target.lead, this.cameraPosition).normalize();
+    const lead = this.project(this.dir, state.camera);
+    const apart = Math.hypot(lead.x - box.x, lead.y - box.y);
+    this.lead.hidden = lead.clamped || apart < 6;
+    if (!this.lead.hidden) {
+      this.lead.style.transform = `translate(${lead.x.toFixed(1)}px, ${lead.y.toFixed(1)}px)`;
     }
   }
 

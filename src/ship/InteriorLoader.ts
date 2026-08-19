@@ -117,8 +117,10 @@ const UV_OFFSET: [number, number] = [0.137, 0.081];
 
 /** Displaymotiv je Screen-Mesh; die Farbe kommt aus dem GLB-Material. */
 const SCREENS: Record<string, ScreenKind> = {
-  SM_Screen_MFD: 'radar',
-  SM_Screen_L: 'bars',
+  SM_Screen_MFD: 'bars',
+  // Traegt im Spiel das Radar (siehe RadarScreen); das Motiv hier ist nur der
+  // Rueckfall, solange der Innenraum noch nicht angebunden ist.
+  SM_Screen_L: 'radar',
   SM_Screen_R: 'text',
   SM_Screen_Overhead: 'ladder',
   SM_Screen_Corridor: 'text',

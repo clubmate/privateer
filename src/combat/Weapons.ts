@@ -9,7 +9,7 @@ import {
 } from 'three';
 import type { Object3D } from 'three';
 import type { Asteroids } from '../world/Asteroids';
-import type { Effects } from './Effects';
+import type { ImpactSink } from './Effects';
 
 /**
  * Bordkanonen: zwei Muendungen an den Flanken, die abwechselnd feuern.
@@ -94,7 +94,7 @@ export class Weapons {
 
   constructor(
     private readonly asteroids: Asteroids,
-    private readonly effects: Effects,
+    private readonly effects: ImpactSink,
     params: Partial<WeaponParams> = {},
   ) {
     this.params = { ...DEFAULT_WEAPON_PARAMS, ...params };

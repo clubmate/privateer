@@ -16,6 +16,15 @@ import {
  * ohne Tiefenschreiben, damit sie zusammen mit dem Bloom gluehen.
  */
 
+/**
+ * Alles, was Einschlaege sichtbar macht. Waffen und Rumpfkollision haengen nur
+ * an dieser Schnittstelle, damit sie ohne Canvas — und damit im Test — laufen.
+ */
+export interface ImpactSink {
+  spawnImpact(position: Vector3, radius: number): void;
+  spawnExplosion(position: Vector3, radius: number, drift: Vector3): void;
+}
+
 /** Groesse des Pools. Reicht fuer eine Explosion plus laufende Treffer. */
 const POOL_SIZE = 48;
 
@@ -52,7 +61,7 @@ function createPuffTexture(): CanvasTexture {
 const _zero = new Vector3();
 const _spark = new Vector3();
 
-export class Effects extends Group {
+export class Effects extends Group implements ImpactSink {
   private readonly puffs: Puff[] = [];
   private next = 0;
 
