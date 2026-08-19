@@ -12,6 +12,7 @@ import {
 import type { Material, Texture } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { createScreenTexture, type ScreenKind } from './InteriorScreens';
+import { createSurfaceMaps, TILE_METERS, type SurfaceKind, type SurfaceMaps } from './InteriorSurfaces';
 
 /**
  * Laedt `public/models/ship-interior.glb` und bringt es auf die Konventionen
@@ -37,27 +38,34 @@ const MARKERS = ['Seat_Pilot', 'Stand_Pilot'];
 
 /**
  * Dezente Innenbeleuchtung: [Name, Farbe, Intensitaet, Position, Reichweite].
- * Die Lampen haengen bewusst mindestens ~0,4 m von Decken und Moebeln entfernt —
- * bei physikalischem 1/r²-Abfall brennt sonst genau darunter alles aus.
+ *
+ * **Abfall:** Physikalisch korrekte 1/r²-Lampen sind in einem 2,3 m hohen Raum
+ * nicht zu baendigen — eine Lampe, die 3 m weiter noch etwas beitraegt, brennt
+ * die Decke 0,35 m darueber komplett weiss. Deshalb {@link LIGHT_DECAY}
+ * deutlich unter 2: der Helligkeitsunterschied zwischen Lampennaehe und
+ * Raumende schrumpft von Faktor ~70 auf ~9.
  */
 const LIGHTS: Array<[string, number, number, [number, number, number], number]> = [
   // Cockpit: Deckenleuchte hinter dem Sitz, kuehles Streulicht ueber der
   // Konsole und zwei schwache Sill-Lampen, die die Kanzelstreben modellieren.
-  ['Light_Cockpit', 0xa9c8ff, 4.0, [0, 1.90, 2.05], 8],
-  ['Light_Console', 0x5ec6ff, 1.1, [0, 1.62, 3.95], 3.2],
-  ['Light_Ck_SillL', 0xff8f6a, 0.9, [-1.15, 0.55, 2.60], 2.6],
-  ['Light_Ck_SillR', 0xff8f6a, 0.9, [1.15, 0.55, 2.60], 2.6],
+  ['Light_Cockpit', 0xa9c8ff, 0.85, [0, 1.85, 2.05], 8],
+  ['Light_Console', 0x5ec6ff, 0.28, [0, 1.62, 3.95], 3.2],
+  ['Light_Ck_SillL', 0xff8f6a, 0.16, [-1.15, 0.55, 2.60], 2.6],
+  ['Light_Ck_SillR', 0xff8f6a, 0.16, [1.15, 0.55, 2.60], 2.6],
   // Gang: warmes Deckenlicht plus kalter Akzent auf dem Wandscreen.
-  ['Light_Corridor', 0xffd2a0, 4.0, [0, 1.80, 0.10], 5],
-  ['Light_Cr_Screen', 0x66d8ff, 0.7, [-0.35, 1.25, 0.25], 1.4],
+  ['Light_Corridor', 0xffd2a0, 0.8, [0, 1.75, 0.10], 5],
+  ['Light_Cr_Screen', 0x66d8ff, 0.12, [-0.35, 1.25, 0.25], 1.4],
   // Wohn-/Frachtraum: Hauptlicht vorn, waermeres Licht ueber den Kisten.
-  ['Light_Bay_Fore', 0xcfe0ff, 6.5, [0, 1.95, -2.30], 7],
-  ['Light_Bay_Aft', 0xffcf9a, 4.5, [0, 1.95, -4.05], 6],
+  ['Light_Bay_Fore', 0xcfe0ff, 1.05, [0, 1.90, -2.30], 7],
+  ['Light_Bay_Aft', 0xffcf9a, 0.8, [0, 1.90, -4.05], 6],
   // Kojenlampe (Koje liegt bei x +1.0, z -2.6, Kojendach bei y 1.20).
-  ['Light_Bunk', 0xffb877, 0.9, [1.0, 0.95, -2.60], 2.0],
+  ['Light_Bunk', 0xffb877, 0.14, [1.0, 0.95, -2.60], 2.0],
   // Werkbank an der Backbordwand.
-  ['Light_Bench', 0x9fd4ff, 0.8, [-1.15, 1.35, -3.45], 2.2],
+  ['Light_Bench', 0x9fd4ff, 0.14, [-1.15, 1.35, -3.45], 2.2],
 ];
+
+/** Abfallexponent der Innenlampen (2 = physikalisch, siehe {@link LIGHTS}). */
+const LIGHT_DECAY = 1.25;
 
 /**
  * Sitzpose. Das GLB setzt den Augenpunkt auf (0, 1.22, 3.20); das sitzt tief
@@ -83,6 +91,29 @@ const FRAME_BLOCKS: Record<string, number> = {
   SM_Canopy_Frames_Long: 8,
   SM_Canopy_Frames_Ring: 4,
 };
+
+/**
+ * Oberflaechenart je GLB-Material. Materialien ohne Eintrag (Glas, Leuchten,
+ * Displays, Polster) bleiben glatt.
+ */
+const SURFACES: Record<string, SurfaceKind> = {
+  Hull_Metal: 'panel',
+  Panel_Metal: 'panel',
+  Panel_Metal_Worn: 'worn',
+  Strut_Steel: 'worn',
+  Floor_Grate: 'grate',
+  Accent_Rust: 'worn',
+  Accent_Hazard: 'worn',
+};
+
+/** Staerke der prozeduralen Normalen (x/y der Normal-Map). */
+const NORMAL_SCALE = 0.55;
+
+/**
+ * Versatz der Boxprojektion in UV-Einheiten. Ohne ihn faellt eine Blechnaht
+ * genau auf die Symmetrieebene x=0 und teilt Armaturenbrett und Decke mittig.
+ */
+const UV_OFFSET: [number, number] = [0.137, 0.081];
 
 /** Displaymotiv je Screen-Mesh; die Farbe kommt aus dem GLB-Material. */
 const SCREENS: Record<string, ScreenKind> = {
@@ -113,8 +144,13 @@ const COPLANAR_PASSES = 4;
  */
 const INTERIOR_CENTER = new Vector3(0, 1.15, 0);
 
-/** Staerke der Umgebungsreflexion auf den Innenraummaterialien. */
-const ENV_INTENSITY = 1.0;
+/**
+ * Staerke der Umgebungsreflexion auf den Innenraummaterialien. Das
+ * PMREM-Environment ist die eigentliche Grundhelligkeit des Raums — es
+ * leuchtet gleichmaessig und kann deshalb hoch stehen, ohne zu blenden,
+ * waehrend die Punktlampen nur noch Akzente setzen.
+ */
+const ENV_INTENSITY = 1.6;
 const ENV_INTENSITY_GLASS = 0.6;
 
 /**
@@ -123,18 +159,18 @@ const ENV_INTENSITY_GLASS = 0.6;
  * damit auf reines Weiss aus, statt farbig zu leuchten.
  */
 const EMISSIVE_SCALE: Record<string, number> = {
-  Screen_Emissive: 0.4,
-  Screen_Emissive_Amber: 0.45,
+  Screen_Emissive: 0.32,
+  Screen_Emissive_Amber: 0.36,
   // Die Deckenstreifen sind grossflaechig; mit Bloom reicht deutlich weniger,
   // sonst sind es weisse Rechtecke statt Lampen.
-  Light_Strip: 0.3,
-  Light_Strip_Red: 0.5,
+  Light_Strip: 0.16,
+  Light_Strip_Red: 0.4,
 };
 
 /** Erzeugt die Punktlichter (Emissive-Materialien leuchten selbst nicht). */
 function addInteriorLights(root: Object3D): void {
   for (const [name, color, intensity, pos, distance] of LIGHTS) {
-    const light = new PointLight(color, intensity, distance, 2);
+    const light = new PointLight(color, intensity, distance, LIGHT_DECAY);
     light.name = name;
     light.position.set(pos[0], pos[1], pos[2]);
     root.add(light);
@@ -391,6 +427,83 @@ function planarUv(mesh: Mesh, normal: Vector3): void {
 }
 
 /**
+ * Boxprojizierte UVs in Modellkoordinaten: pro Vertex entscheidet die Normale,
+ * welche der drei Achsen wegfaellt. Weil projiziert wird, passen benachbarte
+ * Teile ohne Naht zueinander, und eine UV-Einheit entspricht ueberall
+ * {@link TILE_METERS} Metern.
+ *
+ * Meshes, die schon UVs mitbringen, bleiben unangetastet.
+ */
+function boxProjectUv(mesh: Mesh): void {
+  const geometry = mesh.geometry;
+  if (geometry.getAttribute('uv')) return;
+  const position = geometry.getAttribute('position') as BufferAttribute | undefined;
+  const normals = geometry.getAttribute('normal') as BufferAttribute | undefined;
+  if (!position || !normals) return;
+
+  const uv = new Float32Array(position.count * 2);
+  for (let i = 0; i < position.count; i++) {
+    _point.fromBufferAttribute(position, i);
+    _normal.fromBufferAttribute(normals, i);
+
+    const ax = Math.abs(_normal.x);
+    const ay = Math.abs(_normal.y);
+    const az = Math.abs(_normal.z);
+
+    let u: number;
+    let v: number;
+    if (ax >= ay && ax >= az) {
+      u = _point.z;
+      v = _point.y;
+    } else if (ay >= az) {
+      u = _point.x;
+      v = _point.z;
+    } else {
+      u = _point.x;
+      v = _point.y;
+    }
+    uv[i * 2] = u / TILE_METERS + UV_OFFSET[0];
+    uv[i * 2 + 1] = v / TILE_METERS + UV_OFFSET[1];
+  }
+  geometry.setAttribute('uv', new BufferAttribute(uv, 2));
+}
+
+/**
+ * Prozedurale Bleche, Naehte und Gitterroste auf die Huellenmaterialien legen
+ * (siehe {@link SURFACES}). Ohne das ist jede Wand eine einfarbige Flaeche.
+ */
+function applySurfaces(root: Object3D): void {
+  const cache = new Map<SurfaceKind, SurfaceMaps>();
+  const maps = (kind: SurfaceKind): SurfaceMaps => {
+    let entry = cache.get(kind);
+    if (!entry) cache.set(kind, (entry = createSurfaceMaps(kind)));
+    return entry;
+  };
+
+  const done = new Set<Material>();
+  root.traverse((obj) => {
+    if (!(obj instanceof Mesh) || obj.name.startsWith('COL_')) return;
+    boxProjectUv(obj);
+
+    const materials: Material[] = Array.isArray(obj.material) ? obj.material : [obj.material];
+    for (const material of materials) {
+      if (!material || done.has(material)) continue;
+      done.add(material);
+
+      const kind = SURFACES[material.name];
+      if (kind === undefined || !(material instanceof MeshStandardMaterial)) continue;
+
+      const surface = maps(kind);
+      material.map = surface.map;
+      material.roughnessMap = surface.roughnessMap;
+      material.normalMap = surface.normalMap;
+      material.normalScale.set(NORMAL_SCALE, NORMAL_SCALE);
+      material.needsUpdate = true;
+    }
+  });
+}
+
+/**
  * Den Leuchtflaechen echte Displayinhalte geben (siehe {@link SCREENS}). Jedes
  * Screen-Mesh bekommt eine eigene Materialkopie mit `emissiveMap`, damit die
  * Motive sich unterscheiden.
@@ -446,6 +559,7 @@ export async function loadShipInterior(
   separateCoplanarFaces(root);
   separateDecals(root);
   declutterCockpit(root);
+  applySurfaces(root);
   applyScreens(root);
   addInteriorLights(root);
 

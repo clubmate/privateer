@@ -19,6 +19,20 @@ export interface AsteroidOptions {
   minRadius: number;
   maxRadius: number;
   seed: number;
+  /** Sekunden, bis ein zerstoerter Brocken andernorts nachwaechst. */
+  respawnDelay: number;
+}
+
+/** Treffer eines Segmenttests gegen das Feld. */
+export interface AsteroidHit {
+  /** Instanzindex des getroffenen Brockens. */
+  index: number;
+  /** Trefferpunkt in Weltkoordinaten. */
+  point: Vector3;
+  /** Strecke vom Segmentanfang bis zum Treffer, in Metern. */
+  distance: number;
+  /** Radius des Brockens in Metern (fuer Effekte). */
+  radius: number;
 }
 
 const DEFAULTS: AsteroidOptions = {
@@ -28,7 +42,23 @@ const DEFAULTS: AsteroidOptions = {
   minRadius: 2.5,
   maxRadius: 50,
   seed: 4711,
+  respawnDelay: 25,
 };
+
+/**
+ * Bounding-Radius der Brockengeometrie relativ zur Instanzskalierung. Die
+ * Deformation in {@link chunkGeometry} laesst den Einheitsbrocken zwischen
+ * 0,7 und ~1,4 schwanken; fuer den Trefferradius zaehlt der grobe Umriss.
+ */
+const HIT_RADIUS_FACTOR = 1.15;
+
+/** Trefferpunkte, ab denen ein Brocken zerbricht: 1 + Radius / diesem Wert. */
+const HITPOINTS_PER_METER = 14;
+
+/** Trefferpunkte nach Groesse: kleine Brocken platzen sofort, grosse halten. */
+function hitpointsFor(radius: number): number {
+  return 1 + Math.floor(radius / HITPOINTS_PER_METER);
+}
 
 /**
  * Unregelmaessig deformierter Brocken. Die Deformation haengt nur von der
@@ -63,10 +93,20 @@ export class Asteroids extends InstancedMesh<IcosahedronGeometry, MeshStandardMa
   private readonly axes: Vector3[] = [];
   private readonly speeds: number[] = [];
   private readonly scales: number[] = [];
+  /** Verbleibende Trefferpunkte; 0 = zerstoert und unsichtbar. */
+  private readonly hitpoints: number[] = [];
+  /** Restzeit bis zum Nachwachsen in Sekunden (nur fuer zerstoerte Brocken). */
+  private readonly respawn: number[] = [];
+
+  private readonly options: AsteroidOptions;
+  private readonly rng: () => number;
+  private readonly color = new Color();
 
   private readonly tmpMatrix = new Matrix4();
   private readonly tmpQuat = new Quaternion();
   private readonly tmpScale = new Vector3();
+  private readonly tmpVec = new Vector3();
+  private readonly hit: AsteroidHit = { index: -1, point: new Vector3(), distance: 0, radius: 0 };
 
   constructor(options: Partial<AsteroidOptions> = {}) {
     const o: AsteroidOptions = { ...DEFAULTS, ...options };
@@ -79,8 +119,10 @@ export class Asteroids extends InstancedMesh<IcosahedronGeometry, MeshStandardMa
     // Das Feld umgibt die Startposition — Culling der Gesamtmenge bringt nichts.
     this.frustumCulled = false;
 
-    const rng = makeRng(o.seed);
-    const color = new Color();
+    this.options = o;
+    this.rng = makeRng(o.seed);
+    const rng = this.rng;
+    const color = this.color;
     const euler = new Euler();
 
     for (let i = 0; i < o.count; i++) {
@@ -106,23 +148,124 @@ export class Asteroids extends InstancedMesh<IcosahedronGeometry, MeshStandardMa
       const warm = rng() * 0.12;
       color.setRGB(shade * (1 + warm), shade * (1 + warm * 0.5), shade * (1 - warm * 0.35));
       this.setColorAt(i, color);
+
+      this.hitpoints.push(hitpointsFor(this.scales[i]!));
+      this.respawn.push(0);
     }
 
     this.writeMatrices();
     if (this.instanceColor) this.instanceColor.needsUpdate = true;
   }
 
-  /** Langsame Eigenrotation. */
+  /** Langsame Eigenrotation, plus Nachwachsen zerstoerter Brocken. */
   update(dt: number): void {
     for (let i = 0; i < this.count; i++) {
+      if (this.hitpoints[i]! <= 0) {
+        this.respawn[i]! -= dt;
+        if (this.respawn[i]! <= 0) this.reseed(i);
+        continue;
+      }
       this.tmpQuat.setFromAxisAngle(this.axes[i]!, this.speeds[i]! * dt);
       this.rotations[i]!.premultiply(this.tmpQuat).normalize();
     }
     this.writeMatrices();
   }
 
+  /** Trefferradius eines Brockens in Metern. */
+  getRadius(index: number): number {
+    return this.scales[index]! * HIT_RADIUS_FACTOR;
+  }
+
+  /** Mittelpunkt eines Brockens in Weltkoordinaten. */
+  getCenter(index: number, out: Vector3): Vector3 {
+    return out.copy(this.positions[index]!).add(this.position);
+  }
+
+  /**
+   * Erster Brocken, den die Strecke `from` -> `from + direction * length`
+   * trifft (Kugeltest gegen den Umriss). `null`, wenn nichts im Weg liegt.
+   * Koordinaten in Weltkoordinaten; das Ergebnisobjekt wird wiederverwendet.
+   */
+  hitSegment(from: Vector3, direction: Vector3, length: number): AsteroidHit | null {
+    let bestDistance = length;
+    let bestIndex = -1;
+
+    for (let i = 0; i < this.count; i++) {
+      if (this.hitpoints[i]! <= 0) continue;
+
+      // Strecke im Feldsystem betrachten (das Feld ist nur verschoben).
+      this.tmpVec.copy(this.positions[i]!).add(this.position).sub(from);
+      const along = this.tmpVec.dot(direction);
+      const radius = this.getRadius(i);
+      if (along < -radius || along > bestDistance + radius) continue;
+
+      const perpSq = this.tmpVec.lengthSq() - along * along;
+      const radiusSq = radius * radius;
+      if (perpSq > radiusSq) continue;
+
+      const half = Math.sqrt(radiusSq - perpSq);
+      const entry = along - half;
+      const distance = entry < 0 ? 0 : entry; // Startpunkt schon im Brocken
+      if (distance > bestDistance) continue;
+
+      bestDistance = distance;
+      bestIndex = i;
+    }
+
+    if (bestIndex < 0) return null;
+    this.hit.index = bestIndex;
+    this.hit.distance = bestDistance;
+    this.hit.radius = this.getRadius(bestIndex);
+    this.hit.point.copy(direction).multiplyScalar(bestDistance).add(from);
+    return this.hit;
+  }
+
+  /**
+   * Schaden anrichten. Liefert `true`, wenn der Brocken dadurch zerbricht; er
+   * verschwindet dann und wird nach {@link AsteroidOptions.respawnDelay}
+   * anderswo im Feld neu gesetzt.
+   */
+  damage(index: number, amount: number): boolean {
+    if (this.hitpoints[index]! <= 0) return false;
+    this.hitpoints[index]! -= amount;
+    if (this.hitpoints[index]! > 0) return false;
+
+    this.hitpoints[index] = 0;
+    this.respawn[index] = this.options.respawnDelay;
+    // Skalierung 0: die Instanz bleibt im Puffer, ist aber unsichtbar.
+    this.tmpMatrix.makeScale(0, 0, 0);
+    this.setMatrixAt(index, this.tmpMatrix);
+    this.instanceMatrix.needsUpdate = true;
+    return true;
+  }
+
+  /** Zerstoerten Brocken an neuer Stelle wiederbeleben. */
+  private reseed(index: number): void {
+    const o = this.options;
+    const rng = this.rng;
+    const u = rng() * 2 - 1;
+    const phi = rng() * Math.PI * 2;
+    const ring = Math.sqrt(Math.max(0, 1 - u * u));
+    const dist = o.innerRadius + (o.outerRadius - o.innerRadius) * Math.cbrt(rng());
+    this.positions[index]!
+      .set(Math.cos(phi) * ring, u * 0.45, Math.sin(phi) * ring)
+      .multiplyScalar(dist);
+
+    const t = Math.pow(rng(), 2.6);
+    this.scales[index] = o.minRadius + (o.maxRadius - o.minRadius) * t;
+    this.hitpoints[index] = hitpointsFor(this.scales[index]!);
+    this.respawn[index] = 0;
+
+    const shade = 0.3 + rng() * 0.5;
+    const warm = rng() * 0.12;
+    this.color.setRGB(shade * (1 + warm), shade * (1 + warm * 0.5), shade * (1 - warm * 0.35));
+    this.setColorAt(index, this.color);
+    if (this.instanceColor) this.instanceColor.needsUpdate = true;
+  }
+
   private writeMatrices(): void {
     for (let i = 0; i < this.count; i++) {
+      if (this.hitpoints[i]! <= 0) continue;
       const s = this.scales[i]!;
       this.tmpScale.set(s, s, s);
       this.tmpMatrix.compose(this.positions[i]!, this.rotations[i]!, this.tmpScale);

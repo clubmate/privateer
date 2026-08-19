@@ -37,6 +37,7 @@ QWERTY sind also identisch.
 | Eingabe | Wirkung |
 | --- | --- |
 | Maus | Pitch/Yaw — im Arcade-Modus dreht das Schiff direkt mit der Maus, im Newton-Modus wirkt der Offset vom Bildzentrum als stehendes Steuerkreuz (Privateer-Stil) |
+| Linke Maustaste / `Leertaste` | **Feuern** — beide Bordkanonen, Konvergenz bei 900 m |
 | `W` / `S` | Sollgeschwindigkeit hoch/runter (Newton frei: Haupt-/Retroschub) |
 | `Q` / `E` | Rollen links/rechts |
 | `A` / `D` | Lateralschub links/rechts |
@@ -71,6 +72,21 @@ weiterfliegt.
   Physik-Timestep mit 120 Hz, Rendern mit variabler Framerate.
 - **Bild:** Bloom ueber einen `EffectComposer` (Leuchtstreifen, Displays, Sonne);
   das Antialiasing macht das multisampelte Zwischenziel.
+- **Bordkanonen:** Zwei Muendungen an den Flanken feuern abwechselnd. Die
+  Geschosse leben in Weltkoordinaten (nicht am Schiff), damit sie stehen
+  bleiben, wenn das Schiff wegdreht, und wandern beim Floating-Origin-Sprung
+  mit. Treffer laufen als Kugeltest gegen die Instanzen des Asteroidenfeldes;
+  grosse Brocken brauchen mehrere Treffer, zerstoerte wachsen nach 25 s an
+  anderer Stelle nach.
+- **Innenraumoberflaechen:** Das GLB bringt keine einzige Textur mit. Blech-,
+  Verschleiss- und Gitterrostkacheln entstehen zur Laufzeit als Hoehenfeld,
+  aus dem Normal-, Rauheits- und Schmutzkanal abgeleitet werden; die UVs kommen
+  aus einer Boxprojektion in Modellkoordinaten, damit benachbarte Teile
+  nahtlos zueinander passen (1 UV-Einheit = 2 m).
+- **Innenlicht:** Die Punktlampen laufen mit einem Abfallexponenten von 1,25
+  statt physikalischen 2 — in einem 2,3 m hohen Raum brennt eine korrekte
+  1/r²-Lampe alles in ihrer Naehe weiss. Die Grundhelligkeit kommt aus dem
+  PMREM-Environment, die Lampen setzen nur Akzente.
 - **Walk-Mode:** Der Spieler lebt im **Schiffslokalraum** — die Kamera wird beim
   Aufstehen vom Sitzmarker ans Schiffs-Rig umgehaengt und macht dadurch jede
   Schiffsbewegung ohne Nachziehen mit. Kollision: Kapsel (r = 0,3 m, Augenhoehe
@@ -97,13 +113,16 @@ src/
   main.ts                      Bootstrap, Game-Loop, Verdrahtung
   core/Input.ts                Tastatur/Maus, Pointer Lock
   core/Time.ts                 Fixed-Timestep-Akkumulator
-  world/                       Starfield, Sonne, Planet, Asteroiden
+  world/                       Starfield, Sonne, Planet, Asteroiden (mit Treffern)
   ship/Ship.ts                 Schiffs-Rig, Marker, COL_-Meshes
   ship/InteriorLoader.ts       GLB laden, Achsen/Material/Licht/Sicht korrigieren
   ship/InteriorEnvironment.ts  Dunkles PMREM-Environment fuer die Metalle
   ship/PlaceholderInterior.ts  Prozeduraler Ersatz-Innenraum
   ship/FlightModel.ts          Arcade- und Newton-Flugmodell
   ship/InteriorScreens.ts      Canvas-Texturen fuer die Cockpit-Displays
+  ship/InteriorSurfaces.ts     Prozedurale Blech-/Gitterkacheln (Normal, Rauheit)
+  combat/Weapons.ts            Bordkanonen, Geschosse, Trefferaufloesung
+  combat/Effects.ts            Einschlaege und Explosionen (Sprite-Pool)
   render/Postprocessing.ts     Bloom-Pipeline
   player/SeatedController.ts   Flugsteuerung
   player/PlayerState.ts        State-Machine SEATED <-> WALKING

@@ -50,6 +50,7 @@ First-Person durchs eigene Schiff laufen können. Three.js + TypeScript + Vite.
 - `KeyQ`/`KeyE`: Rollen
 - `KeyA`/`KeyD`: Lateralschub links/rechts
 - `ShiftLeft`/`ControlLeft`: Schub hoch/runter
+- Linke Maustaste / `Space`: Bordkanonen feuern
 - `KeyX`: Full Stop (bremst auf 0)
 - `KeyV`: Flugmodus weiterschalten (Arcade -> Newton+Assist -> Newton frei)
 - `Tab`: Afterburner (Schubfaktor 4, solange gehalten)

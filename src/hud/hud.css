@@ -29,6 +29,14 @@
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
+  transition: color 90ms linear, transform 90ms ease-out;
+}
+
+/* Treffer: Fadenkreuz blitzt kurz warm auf und zuckt minimal. */
+.hud__center.is-hit {
+  color: var(--hud-warn);
+  transform: translate(-50%, -50%) scale(1.18);
+  text-shadow: 0 0 10px rgba(255, 179, 71, 0.8);
 }
 
 .hud__ring {

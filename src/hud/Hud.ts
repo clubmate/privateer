@@ -22,6 +22,10 @@ export interface HudState {
   mouseOffset: { x: number; y: number };
   /** Obergrenze der Sollgeschwindigkeit fuer den Balken. */
   maxSetSpeed: number;
+  /** Zahl der zerstoerten Brocken. */
+  kills: number;
+  /** Sekunden seit dem letzten Treffer (blitzt kurz im Fadenkreuz auf). */
+  sinceHit: number;
 }
 
 /** Beschriftung des Modus-Chips. */
@@ -30,6 +34,9 @@ const MODE_LABEL: Record<FlightMode, string> = {
   assist: 'NEWTON · ASSIST',
   newton: 'NEWTON · FREI',
 };
+
+/** So lange leuchtet das Fadenkreuz nach einem Treffer auf, in Sekunden. */
+const HIT_FLASH_DURATION = 0.18;
 
 /** Ab dieser Geschwindigkeit hat der Velocity-Vektor eine sinnvolle Richtung. */
 const MARKER_MIN_SPEED = 1;
@@ -84,6 +91,8 @@ export class Hud {
   private readonly ring: HTMLDivElement;
   private readonly prograde: HTMLDivElement;
   private readonly retrograde: HTMLDivElement;
+  private readonly center: HTMLDivElement;
+  private readonly killsValue: HTMLSpanElement;
   private readonly speedValue: HTMLSpanElement;
   private readonly setValue: HTMLSpanElement;
   private readonly barFill: HTMLDivElement;
@@ -106,6 +115,8 @@ export class Hud {
   private lastSpeed = -1;
   private lastSet = -1;
   private lastMode = '';
+  private lastKills = -1;
+  private lastHitFlash: boolean | null = null;
   private lastBurn = false;
   private lastLocked: boolean | null = null;
 
@@ -132,6 +143,10 @@ export class Hud {
           <div class="hud__bar-fill" data-fill></div>
           <div class="hud__bar-set" data-setmark></div>
         </div>
+        <div class="hud__row">
+          <span class="hud__label">KILLS</span>
+          <span class="hud__value" data-kills>0</span>
+        </div>
       </div>
 
       <div class="hud__status">
@@ -139,13 +154,15 @@ export class Hud {
         <span class="hud__chip" data-burn>AB</span>
       </div>
 
-      <div class="hud__keys hud__keys--flight">W/S SET SPEED &middot; Q/E ROLL &middot; A/D STRAFE &middot; SHIFT/CTRL LIFT &middot; X FULL STOP &middot; V FLUGMODUS &middot; TAB BURN &middot; F AUFSTEHEN</div>
+      <div class="hud__keys hud__keys--flight">MAUS/LEER FEUERN &middot; W/S SET SPEED &middot; Q/E ROLL &middot; A/D STRAFE &middot; SHIFT/CTRL LIFT &middot; X FULL STOP &middot; V FLUGMODUS &middot; TAB BURN &middot; F AUFSTEHEN</div>
       <div class="hud__keys hud__keys--walk">W/A/S/D GEHEN &middot; MAUS UMSEHEN &middot; F AM SITZ HINSETZEN</div>
       <div class="hud__prompt" hidden></div>
       <div class="hud__hint" hidden>KLICKEN ZUM STEUERN</div>
     `;
     parent.appendChild(this.root);
 
+    this.center = this.require('.hud__center');
+    this.killsValue = this.require('[data-kills]');
     this.cursor = this.require('.hud__cursor');
     this.ring = this.require('.hud__ring');
     this.prograde = this.require('.hud__marker--pro');
@@ -231,6 +248,17 @@ export class Hud {
       this.assistChip.textContent = mode;
       this.assistChip.classList.toggle('is-on', !state.fullStop && state.mode !== 'newton');
       this.assistChip.classList.toggle('is-warn', state.fullStop);
+    }
+
+    if (state.kills !== this.lastKills) {
+      this.lastKills = state.kills;
+      this.killsValue.textContent = `${state.kills}`;
+    }
+
+    const hitFlash = state.sinceHit < HIT_FLASH_DURATION;
+    if (hitFlash !== this.lastHitFlash) {
+      this.lastHitFlash = hitFlash;
+      this.center.classList.toggle('is-hit', hitFlash);
     }
 
     if (state.afterburner !== this.lastBurn) {

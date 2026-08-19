@@ -20,6 +20,8 @@ import { SeatedController } from './player/SeatedController';
 import { WalkController } from './player/WalkController';
 import { PlayerState } from './player/PlayerState';
 import { Hud } from './hud/Hud';
+import { Effects } from './combat/Effects';
+import { Weapons } from './combat/Weapons';
 import { createPostprocessing } from './render/Postprocessing';
 
 const container = document.getElementById('app');
@@ -63,7 +65,11 @@ const asteroids = new Asteroids();
 
 const ship = new Ship();
 
-scene.add(starfield, sun, planet, asteroids, ship);
+// Waffen: Geschosse und Effekte leben in Weltkoordinaten, nicht am Schiff.
+const effects = new Effects();
+const weapons = new Weapons(asteroids, effects);
+
+scene.add(starfield, sun, planet, asteroids, ship, weapons.mesh, effects);
 
 // Kamera sitzt starr auf dem Pilotenmarker und erbt damit dessen Position und
 // Blickrichtung (-Z). Ueber den Marker haengt sie am Schiffs-Rig.
@@ -117,6 +123,8 @@ function applyFloatingOrigin(): void {
   ship.position.set(0, 0, 0);
   planet.position.sub(originOffset);
   asteroids.position.sub(originOffset);
+  weapons.shift(originOffset);
+  effects.shift(originOffset);
   // Starfield und Sonne folgen der Kamera und brauchen keine Verschiebung.
 }
 
@@ -129,6 +137,8 @@ function fixedUpdate(dt: number): void {
   flight.update(dt);
   // Laufphysik im Schiffslokalraum — unabhaengig davon, wohin das Schiff fliegt.
   player.fixedUpdate(dt);
+  weapons.update(dt, ship, flight.velocity);
+  effects.update(dt);
   applyFloatingOrigin();
 }
 
@@ -156,6 +166,8 @@ function render(dt: number): void {
     pointerLocked: input.pointerLocked,
     mouseOffset: seated.getMouseOffset(),
     maxSetSpeed: flight.getParams().maxSetSpeed,
+    kills: weapons.kills,
+    sinceHit: weapons.getTimeSinceHit(),
   });
 }
 
@@ -166,6 +178,12 @@ renderer.setAnimationLoop(() => {
   seated.update(time.frameDelta);
   // Modewechsel (KeyF) und Umsehen beim Gehen: ebenfalls einmal pro Frame.
   player.update(time.frameDelta);
+  // Gefeuert wird nur sitzend und mit gefangenem Zeiger.
+  weapons.setTrigger(
+    !player.isWalking &&
+      input.pointerLocked &&
+      (input.isMouseDown(0) || input.isDown('Space')),
+  );
   const dt = time.tick(fixedUpdate);
   render(dt);
   input.endFrame();
@@ -183,5 +201,5 @@ window.addEventListener('resize', () => {
 
 // Debug-Zugriff fuer Tests und die folgenden Arbeitspakete.
 Object.assign(window as unknown as Record<string, unknown>, {
-  __privateer: { ship, flight, seated, walk, player, hud, camera, input, scene },
+  __privateer: { ship, flight, seated, walk, player, hud, camera, input, scene, weapons, effects, asteroids },
 });
