@@ -139,12 +139,16 @@ weiterfliegt.
 - **Innenraum:** `public/models/ship-interior.glb` (aus Blender). Bis das Modell
   geladen ist — oder falls das Laden fehlschlaegt — steht ein prozeduraler
   Placeholder-Innenraum mit denselben Konventionen.
-- **Korrekturen beim Laden** (alle in `InteriorLoader`, das GLB bleibt
-  unveraendert): Materialien auf `FrontSide` statt durchgehend `doubleSided`,
-  buendig aufliegende Zierleisten und Aufkleber um 1,5 mm von ihrer
-  Traegerflaeche weggerueckt — beides gegen das Flimmern an den Waenden;
-  Kanzelstreben, die quer durchs Blickfeld laufen, entfernt; Augenpunkt im Sitz
-  etwas hoeher und weiter hinten; Displays bekommen prozedurale Inhalte.
+- **Geometrie:** Das Modell ist einmal durch Blender gelaufen — Fasen an allen
+  sichtbaren Kanten (erst nach `remove_doubles`: der Ur-Export hatte pro
+  Flaeche eigene Vertices, damit findet ein Bevel keine gemeinsamen Kanten),
+  46 zusaetzliche Teile (Rohrbuendel, Handlauf, Lueftungsgitter, Wandkaesten,
+  Feuerloescher), ausgeduennte Kanzelstreben und der neue Augenpunkt. Details
+  in [`ASSET-NOTES.md`](ASSET-NOTES.md).
+- **Korrekturen beim Laden** (in `InteriorLoader`): Materialien auf `FrontSide`
+  statt durchgehend `doubleSided`, buendig aufliegende Zierleisten und
+  Aufkleber um 1,5 mm von ihrer Traegerflaeche weggerueckt — beides gegen das
+  Flimmern an den Waenden; Displays bekommen prozedurale Inhalte.
 - **Massstab:** 1 Unit = 1 Meter, Kamera `near` 0,05 / `far` 1e7 mit
   logarithmischem Tiefenpuffer, damit Cockpitkonsole und Planet in 850 km im
   selben Frustum sauber bleiben. Ab 10 km Abstand vom Ursprung wird die Welt

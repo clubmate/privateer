@@ -1,10 +1,10 @@
 # ship-interior.glb — Integrationsnotizen
 
-GLB: `public/models/ship-interior.glb` (355 KB, 4 157 Dreiecke, 14 Materialien, keine Bildtexturen).
+GLB: `public/models/ship-interior.glb` (858 KB, 27 977 Dreiecke, 14 Materialien, keine Bildtexturen).
 Gesamtmaße: 10,51 m lang × 3,56 m breit × 2,90 m hoch. Root-Empty: `ShipInterior` (einziger Scene-Root).
 
 Aufbau: Cockpit (Sitz, Konsole, Throttle/Stick, Pedale, Overhead-Panel, 5-teilige
-Glaskanzel mit Streben) → Gang (1,40 m breit, 2,10 m hoch) → Wohn-/Frachtraum
+Glaskanzel mit ausgedünnten Streben) → Gang (1,40 m breit, 2,10 m hoch) → Wohn-/Frachtraum
 (3,20 × 4,00 m, 2,30 m hoch; Koje, Spind, Werkbank, 6 Kisten). Türen 1,40 × 2,00 m.
 
 ## Für die Integration wichtig
@@ -19,8 +19,9 @@ Glaskanzel mit Streben) → Gang (1,40 m breit, 2,10 m hoch) → Wohn-/Frachtrau
   doubleSided, roughness 0,05. In Three.js zusätzlich `depthWrite = false` setzen.
 - **Sichtbare Meshes:** Präfix `SM_`. **Kollisionsmeshes:** Präfix `COL_` (41 Stück),
   tragen alle das Material `Collision` (magenta) — zur Laufzeit unsichtbar schalten.
-- **`Seat_Pilot`**: Translation `(0, 1.22, 3.20)`, Rotation Identität; y=1,22 m
-  ist der Augenpunkt im Sitzen. Zur Nase zeigt im GLB **+Z** (siehe
+- **`Seat_Pilot`**: Translation `(0, 1.33, 3.05)`, Rotation Identität; y=1,33 m
+  ist der Augenpunkt im Sitzen. Ursprünglich `(0, 1.22, 3.20)` — zu tief und zu
+  dicht an der Konsole, man schaute vor allem aufs Armaturenbrett. Zur Nase zeigt im GLB **+Z** (siehe
   Achsen-Korrektur oben), nach der Root-Drehung ist es wie üblich −Z.
 - **`Stand_Pilot`**: Translation `(0, 0, 2.05)`, Rotation Identität.
   **Fußposition auf dem Boden (y=0)** — Augenhöhe 1,7 m selbst addieren.
@@ -31,6 +32,28 @@ Glaskanzel mit Streben) → Gang (1,40 m breit, 2,10 m hoch) → Wohn-/Frachtrau
 - **Begehbarkeit verifiziert** (Flood-Fill, Kapsel r=0,3 m): keine Löcher nach
   außen; Cockpit↔Gang↔Frachtraum durchgehend passierbar. Engstelle: zwischen den
   achtern Kisten bei y≈4,6 nur ~0,92 m Lücke, nicht mittig auf x=0.
+
+## Überarbeitung (Blender 5.2, via MCP)
+
+Das GLB wurde einmal komplett durch Blender geschickt. Was sich geändert hat:
+
+- **Fasen an allen sichtbaren Kanten** (0,8–6 mm, an das kleinste Maß des Teils
+  gekoppelt, 2 Segmente, Winkelgrenze 30°), danach weiche Schattierung ab 35°.
+  Wichtig dabei: die Meshes aus dem Ur-Export hatten **pro Fläche eigene
+  Vertices** (24 statt 8 pro Würfel) — so entstehen im glTF harte Normalen, aber
+  der Bevel-Modifier findet keine gemeinsamen Kanten und tut schlicht nichts.
+  Erst `remove_doubles`, dann fasen.
+- **46 zusätzliche Teile** (Präfix wie gehabt `SM_`): Rohrbündel mit Schellen in
+  den Deckenkehlen des Frachtraums, Wandkästen, Feuerlöscher, Handlauf im Gang,
+  Kabelstränge unter der Gangdecke, drei Lüftungsgitter mit Lamellen.
+- **Kanzelstreben ausgedünnt:** die Rippen, die über den Kopf laufen und sich
+  vor der Nase im Blickfeld treffen, sowie drei der vier Spanten sind entfernt.
+  Das erledigte vorher der Loader zur Ladezeit; jetzt liegt es im Asset.
+- **Augenpunkt** auf `(0, 1.33, 3.05)` gesetzt (vorher ebenfalls Laufzeit).
+
+Alle neuen Teile haben eingebackene Transforms — Vertices liegen also direkt in
+Innenraumkoordinaten, wie im Rest des Modells. Darauf bauen die Boxprojektion
+der UVs und die Ebenen-Trennung im Loader auf.
 
 ## COL_-Meshes (41)
 

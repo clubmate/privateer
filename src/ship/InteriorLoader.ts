@@ -81,31 +81,6 @@ const SHADOW_CASTERS = new Set(['Light_Cockpit', 'Light_Corridor', 'Light_Bay_Fo
 const SHADOW_MAP_SIZE = 1024;
 
 /**
- * Sitzpose. Das GLB setzt den Augenpunkt auf (0, 1.22, 3.20); das sitzt tief
- * und dicht an der Konsole — man schaut vor allem auf das Armaturenbrett.
- * Etwas hoeher und ein Stueck zurueck (Kopf vor der Rueckenlehne) gibt freie
- * Sicht ueber den Blendschutz. Werte in GLB-Koordinaten (Nase +Z).
- */
-const SEAT_EYE: [number, number, number] = [0, 1.33, 3.05];
-
-/**
- * Kanzelstreben: das GLB hat acht Laengsrippen und vier Spanten. Die Rippen,
- * die ueber den Kopf laufen, treffen sich vor der Nase genau im Blickfeld —
- * sie fliegen raus. Kriterium ist die Hoehe: alles, was bis unter
- * `FRAME_MAX_Y` bleibt, ist eine Bordwandrippe und darf bleiben.
- */
-const FRAME_MAX_Y = 1.7;
-
-/** Spanten vor dieser z-Ebene liegen im Blickfeld und werden entfernt. */
-const RING_MAX_Z = 3.4;
-
-/** Anzahl gleich grosser Indexbloecke (= Rippen bzw. Spanten) je Mesh. */
-const FRAME_BLOCKS: Record<string, number> = {
-  SM_Canopy_Frames_Long: 8,
-  SM_Canopy_Frames_Ring: 4,
-};
-
-/**
  * Oberflaechenart je GLB-Material. Materialien ohne Eintrag (Glas, Leuchten,
  * Displays, Polster) bleiben glatt.
  */
@@ -292,7 +267,6 @@ function fixMaterials(root: Object3D, environment: Texture | null): void {
   });
 }
 
-const _box = new Box3();
 const _tint = new Color();
 const _point = new Vector3();
 const _normal = new Vector3();
@@ -410,50 +384,6 @@ function separateCoplanarFaces(root: Object3D): void {
 function overlap(a: Box3, b: Box3, axis: number): number {
   return Math.min(a.max.getComponent(axis), b.max.getComponent(axis))
     - Math.max(a.min.getComponent(axis), b.min.getComponent(axis));
-}
-
-/**
- * Behaelt nur die Indexbloecke eines Meshes, deren Geometrie `keep` erfuellt.
- * Die Kanzelstreben liegen als gleich grosse Bloecke (eine Rippe bzw. ein
- * Spant je Block) hintereinander im Indexpuffer.
- */
-function keepFrameBlocks(mesh: Mesh, blocks: number, keep: (bounds: Box3) => boolean): void {
-  const geometry = mesh.geometry;
-  const index = geometry.getIndex();
-  const position = geometry.getAttribute('position');
-  if (!index || index.count % blocks !== 0) return;
-
-  const perBlock = index.count / blocks;
-  const kept: number[] = [];
-  for (let block = 0; block < blocks; block++) {
-    _box.makeEmpty();
-    for (let i = block * perBlock; i < (block + 1) * perBlock; i++) {
-      _point.fromBufferAttribute(position as BufferAttribute, index.getX(i));
-      _box.expandByPoint(_point);
-    }
-    if (!keep(_box)) continue;
-    for (let i = block * perBlock; i < (block + 1) * perBlock; i++) kept.push(index.getX(i));
-  }
-  geometry.setIndex(kept);
-}
-
-/**
- * Cockpit freiraeumen: die Streben, die quer durchs Blickfeld laufen, kommen
- * raus (siehe {@link FRAME_MAX_Y} und {@link RING_MAX_Z}), und der Augenpunkt
- * rueckt auf {@link SEAT_EYE}.
- */
-function declutterCockpit(root: Object3D): void {
-  for (const [name, blocks] of Object.entries(FRAME_BLOCKS)) {
-    const mesh = root.getObjectByName(name);
-    if (!(mesh instanceof Mesh)) continue;
-    const limit = name === 'SM_Canopy_Frames_Ring'
-      ? (bounds: Box3) => bounds.min.z < RING_MAX_Z
-      : (bounds: Box3) => bounds.max.y < FRAME_MAX_Y;
-    keepFrameBlocks(mesh, blocks, limit);
-  }
-
-  const seat = root.getObjectByName('Seat_Pilot');
-  if (seat) seat.position.set(SEAT_EYE[0], SEAT_EYE[1], SEAT_EYE[2]);
 }
 
 /**
@@ -720,7 +650,6 @@ export async function loadShipInterior(
   fixMaterialLook(root);
   separateCoplanarFaces(root);
   separateDecals(root);
-  declutterCockpit(root);
   applySurfaces(root);
   tintSections(root);
   applyScreens(root);
