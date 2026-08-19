@@ -22,13 +22,14 @@ import {
 
 /** Kegel je Leuchte: [Position der Lampe, Radius am Boden, Hoehe, Farbe, Staerke]. */
 const SHAFTS: Array<[[number, number, number], number, number, number, number]> = [
-  // Frachtraum: zwei Kegel von der Decke bis kurz ueber den Boden.
-  [[0, 2.28, -2.3], 1.1, 2.2, 0xcfe0ff, 0.05],
-  [[0, 2.28, -4.05], 1.0, 2.2, 0xffcf9a, 0.045],
+  // Frachtraum: unter den beiden intakten Deckenleuchten. Die defekte in der
+  // Mitte bekommt bewusst keinen.
+  [[0, 2.14, -4.30], 0.95, 2.1, 0xffcf9a, 0.05],
+  [[0, 2.14, -2.10], 1.00, 2.1, 0xffd8b0, 0.05],
   // Gang: schmal, sonst steht man staendig mittendrin.
-  [[0, 2.08, 0.1], 0.45, 2.0, 0xffd2a0, 0.04],
+  [[0, 1.94, 0.10], 0.42, 1.9, 0xffd2a0, 0.04],
   // Cockpit: hinter dem Sitz, faellt auf die Konsole zu.
-  [[0, 2.28, 2.05], 0.9, 2.2, 0xa9c8ff, 0.04],
+  [[0, 2.14, 2.05], 0.85, 2.1, 0xa9c8ff, 0.04],
 ];
 
 /**

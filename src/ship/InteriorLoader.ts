@@ -1,7 +1,6 @@
 import {
   Box3,
   BufferAttribute,
-  Color,
   DoubleSide,
   FrontSide,
   Mesh,
@@ -48,22 +47,18 @@ const MARKERS = ['Seat_Pilot', 'Stand_Pilot'];
  * Raumende schrumpft von Faktor ~70 auf ~9.
  */
 const LIGHTS: Array<[string, number, number, [number, number, number], number]> = [
-  // Cockpit: Deckenleuchte hinter dem Sitz, kuehles Streulicht ueber der
-  // Konsole und zwei schwache Sill-Lampen, die die Kanzelstreben modellieren.
-  ['Light_Cockpit', 0xa9c8ff, 0.85, [0, 1.85, 2.05], 8],
-  ['Light_Console', 0x5ec6ff, 0.28, [0, 1.62, 3.95], 3.2],
-  ['Light_Ck_SillL', 0xff8f6a, 0.16, [-1.15, 0.55, 2.60], 2.6],
-  ['Light_Ck_SillR', 0xff8f6a, 0.16, [1.15, 0.55, 2.60], 2.6],
-  // Gang: warmes Deckenlicht plus kalter Akzent auf dem Wandscreen.
-  ['Light_Corridor', 0xffd2a0, 0.8, [0, 1.75, 0.10], 5],
-  ['Light_Cr_Screen', 0x66d8ff, 0.12, [-0.35, 1.25, 0.25], 1.4],
-  // Wohn-/Frachtraum: Hauptlicht vorn, waermeres Licht ueber den Kisten.
-  ['Light_Bay_Fore', 0xcfe0ff, 1.05, [0, 1.90, -2.30], 7],
-  ['Light_Bay_Aft', 0xffcf9a, 0.8, [0, 1.90, -4.05], 6],
-  // Kojenlampe (Koje liegt bei x +1.0, z -2.6, Kojendach bei y 1.20).
-  ['Light_Bunk', 0xffb877, 0.14, [1.0, 0.95, -2.60], 2.0],
-  // Werkbank an der Backbordwand.
-  ['Light_Bench', 0x9fd4ff, 0.14, [-1.15, 1.35, -3.45], 2.2],
+  // Frachtraum: drei Deckenleuchten, die mittlere ist im Modell defekt und
+  // bekommt deshalb kein Licht — die Luecke im Lichtband ist Absicht.
+  ['Light_Bay_Aft', 0xffcf9a, 1.15, [0, 2.05, -4.30], 6],
+  ['Light_Bay_Fore', 0xffd8b0, 1.30, [0, 2.05, -2.10], 6],
+  ['Light_Bench', 0x9fd4ff, 0.16, [-1.25, 1.45, -1.85], 2.2],
+  ['Light_Bunk', 0xffb877, 0.14, [-1.75, 1.35, -3.55], 2.0],
+  // Gang: eine funktionierende Leuchte, dazu der Schein des Wandmonitors.
+  ['Light_Corridor', 0xffd2a0, 1.00, [0, 1.86, 0.10], 4.5],
+  ['Light_Cr_Screen', 0xffae5c, 0.10, [-0.45, 1.35, 0.35], 1.3],
+  // Cockpit: Deckenleuchte hinter dem Sitz, Schein der Instrumente von unten.
+  ['Light_Cockpit', 0xa9c8ff, 1.05, [0, 2.05, 2.05], 7],
+  ['Light_Console', 0xffb060, 0.40, [0, 1.30, 3.85], 2.6],
 ];
 
 /** Abfallexponent der Innenlampen (2 = physikalisch, siehe {@link LIGHTS}). */
@@ -85,13 +80,14 @@ const SHADOW_MAP_SIZE = 1024;
  * Displays, Polster) bleiben glatt.
  */
 const SURFACES: Record<string, SurfaceKind> = {
-  Hull_Metal: 'panel',
-  Panel_Metal: 'panel',
-  Panel_Metal_Worn: 'worn',
-  Strut_Steel: 'worn',
-  Floor_Grate: 'grate',
-  Accent_Rust: 'worn',
-  Accent_Hazard: 'worn',
+  Paint_Beige: 'panel',
+  Paint_Olive: 'panel',
+  Paint_Worn: 'worn',
+  Metal_Bare: 'worn',
+  Metal_Dark: 'panel',
+  Metal_Rust: 'worn',
+  Floor_Tread: 'grate',
+  Hazard: 'worn',
 };
 
 /** Staerke der prozeduralen Normalen (x/y der Normal-Map). */
@@ -114,49 +110,28 @@ const UV_OFFSET: [number, number] = [0.137, 0.081];
  * (metalness ~0), blankes Stahlzeug bleibt metallisch und wird deutlich heller.
  */
 const MATERIAL_LOOK: Record<string, { color: number; metalness: number; roughness: number }> = {
-  // Lackierte Innenverkleidung — heller Grauton mit kuehlem Stich.
-  Panel_Metal: { color: 0x565c64, metalness: 0.04, roughness: 0.55 },
-  // Dieselbe Farbe, aber abgegriffen und matter.
-  Panel_Metal_Worn: { color: 0x54564f, metalness: 0.06, roughness: 0.72 },
-  // Rumpfstruktur, etwas dunkler und kaelter als die Verkleidung.
-  Hull_Metal: { color: 0x424951, metalness: 0.08, roughness: 0.62 },
-  // Blankes Profilstahl: bleibt metallisch, wird aber deutlich heller.
-  Strut_Steel: { color: 0x767a80, metalness: 0.9, roughness: 0.42 },
-  // Verzinkter Gitterrost.
-  Floor_Grate: { color: 0x3d4247, metalness: 0.75, roughness: 0.62 },
+  // Lackiertes Blech — Dielektrikum, kein Metall (siehe Kopfkommentar oben).
+  Paint_Beige: { color: 0x8a7f68, metalness: 0.04, roughness: 0.62 },
+  Paint_Olive: { color: 0x4f5442, metalness: 0.05, roughness: 0.68 },
+  Paint_Worn: { color: 0x6e6656, metalness: 0.07, roughness: 0.78 },
+  // Blankes Stahlzeug bleibt metallisch und deutlich heller.
+  Metal_Bare: { color: 0x8b8f95, metalness: 0.9, roughness: 0.42 },
+  Metal_Dark: { color: 0x33363a, metalness: 0.85, roughness: 0.55 },
   // Rost ist Oxid, also kein Metall.
-  Accent_Rust: { color: 0x6b3a22, metalness: 0.08, roughness: 0.85 },
-  // Warnfarbe muss lesbar sein.
-  Accent_Hazard: { color: 0xb08f2b, metalness: 0.0, roughness: 0.6 },
-  // Sitzpolster.
-  Seat_Padding: { color: 0x2f3336, metalness: 0.0, roughness: 0.92 },
+  Metal_Rust: { color: 0x7a4526, metalness: 0.08, roughness: 0.9 },
+  Floor_Tread: { color: 0x4a4a46, metalness: 0.8, roughness: 0.55 },
+  Rubber_Black: { color: 0x1a1a1a, metalness: 0.0, roughness: 0.94 },
+  Fabric_Seat: { color: 0x3a342b, metalness: 0.0, roughness: 0.95 },
+  Hazard: { color: 0xc39a2a, metalness: 0.0, roughness: 0.62 },
 };
-
-/**
- * Farbidentitaet der drei Sektionen. Bisher war das ganze Schiff einheitlich
- * graublau; jetzt bekommt jeder Bereich einen eigenen Ton, damit man beim
- * Durchgehen merkt, wo man ist. Zugeordnet wird ueber die Namenskuerzel im
- * GLB (`_Ck_` Cockpit, `_Cr_` Gang, `_Bay_`/`Bay` Frachtraum).
- */
-const SECTION_TINTS: Array<{ match: RegExp; color: number; name: string }> = [
-  // Cockpit: kuehl und technisch.
-  { match: /Ck|Canopy|Console|Glareshield|Nose|Pedal|Stick|Throttle|Bezel/, color: 0x7d93ad, name: 'Cockpit' },
-  // Gang: neutral, etwas dunkler.
-  { match: /Cr(_|[0-9])|Corridor|DoorFrame/, color: 0x8d8d8a, name: 'Gang' },
-  // Frachtraum: warm, benutzt, oelig.
-  { match: /Bay|Bunk|Locker|Bench|Crate/, color: 0x9c8a6e, name: 'Frachtraum' },
-];
-
-/** Materialien, die keine Sektionsfaerbung bekommen (Leuchten, Glas, Displays). */
-const TINT_EXEMPT = /^(Glass|Light_Strip|Light_Strip_Red|Screen_|Collision)/;
 
 /** Displaymotiv je Screen-Mesh; die Farbe kommt aus dem GLB-Material. */
 const SCREENS: Record<string, ScreenKind> = {
-  SM_Screen_MFD: 'bars',
+  SM_Screen_MFD0: 'bars',
   // Traegt im Spiel das Radar (siehe RadarScreen); das Motiv hier ist nur der
   // Rueckfall, solange der Innenraum noch nicht angebunden ist.
-  SM_Screen_L: 'radar',
-  SM_Screen_R: 'text',
+  SM_Screen_MFD1: 'radar',
+  SM_Screen_MFD2: 'text',
   SM_Screen_Overhead: 'ladder',
   SM_Screen_Corridor: 'text',
   SM_Screen_Bench: 'bars',
@@ -188,7 +163,7 @@ const INTERIOR_CENTER = new Vector3(0, 1.15, 0);
  * haben sie wieder einen diffusen Anteil und brauchen deutlich weniger davon
  * als die frueheren Schwarzmetalle.
  */
-const ENV_INTENSITY = 0.85;
+const ENV_INTENSITY = 1.0;
 const ENV_INTENSITY_GLASS = 0.6;
 
 /**
@@ -197,12 +172,12 @@ const ENV_INTENSITY_GLASS = 0.6;
  * damit auf reines Weiss aus, statt farbig zu leuchten.
  */
 const EMISSIVE_SCALE: Record<string, number> = {
-  Screen_Emissive: 0.32,
-  Screen_Emissive_Amber: 0.36,
-  // Die Deckenstreifen sind grossflaechig; mit Bloom reicht deutlich weniger,
-  // sonst sind es weisse Rechtecke statt Lampen.
-  Light_Strip: 0.16,
-  Light_Strip_Red: 0.4,
+  Screen_Amber: 0.34,
+  Screen_Green: 0.30,
+  // Die Leuchtflaechen sind gross; mit Bloom reicht wenig, sonst sind es
+  // weisse Rechtecke statt Lampen.
+  Lamp_Warm: 0.22,
+  Lamp_Red: 0.40,
 };
 
 /** Erzeugt die Punktlichter (Emissive-Materialien leuchten selbst nicht). */
@@ -267,7 +242,6 @@ function fixMaterials(root: Object3D, environment: Texture | null): void {
   });
 }
 
-const _tint = new Color();
 const _point = new Vector3();
 const _normal = new Vector3();
 
@@ -466,38 +440,6 @@ function fixMaterialLook(root: Object3D): void {
 }
 
 /**
- * Sektionsfaerbung: Meshes bekommen je nach Bereich eine eigene Materialkopie
- * mit leicht verschobenem Farbton (siehe {@link SECTION_TINTS}). Kopiert wird
- * je Kombination aus Material und Sektion, damit die Zahl der Materialien
- * klein bleibt.
- */
-function tintSections(root: Object3D): void {
-  const variants = new Map<string, MeshStandardMaterial>();
-
-  root.traverse((obj) => {
-    if (!(obj instanceof Mesh) || obj.name.startsWith('COL_')) return;
-    const source = Array.isArray(obj.material) ? obj.material[0] : obj.material;
-    if (!(source instanceof MeshStandardMaterial)) return;
-    if (TINT_EXEMPT.test(source.name)) return;
-
-    const section = SECTION_TINTS.find((entry) => entry.match.test(obj.name));
-    if (!section) return;
-
-    const key = `${source.name}#${section.name}`;
-    let material = variants.get(key);
-    if (!material) {
-      material = source.clone();
-      material.name = key;
-      // Mischung statt Ersetzung: die Materialfarbe bleibt fuehrend, der
-      // Sektionston legt sich nur darueber.
-      material.color.lerp(_tint.setHex(section.color), 0.22);
-      variants.set(key, material);
-    }
-    obj.material = material;
-  });
-}
-
-/**
  * Boxprojizierte UVs in Modellkoordinaten: pro Vertex entscheidet die Normale,
  * welche der drei Achsen wegfaellt. Weil projiziert wird, passen benachbarte
  * Teile ohne Naht zueinander, und eine UV-Einheit entspricht ueberall
@@ -651,7 +593,6 @@ export async function loadShipInterior(
   separateCoplanarFaces(root);
   separateDecals(root);
   applySurfaces(root);
-  tintSections(root);
   applyScreens(root);
   enableShadows(root);
   addInteriorLights(root);

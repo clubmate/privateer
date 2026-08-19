@@ -12,12 +12,11 @@ import type { Asteroids } from '../world/Asteroids';
  */
 
 /**
- * Mesh im GLB, das ersetzt wird. Bewusst nicht das MFD in der Mitte: das ist
- * ein flaches Breitband-Panel (0,80 m x 0,24 m), auf dem der Radarkreis zur
- * Ellipse wird. Der Screen auf der rechten Konsole ist mit 0,32 m x 0,38 m
- * fast quadratisch — dort bleibt der Kreis ein Kreis.
+ * Mesh im GLB, das ersetzt wird: der mittlere Konsolenmonitor. Er ist im
+ * Modell bewusst quadratisch angelegt (0,34 m x 0,31 m) — auf den flankierenden
+ * Breitbandmonitoren wuerde der Radarkreis zur Ellipse.
  */
-const SCREEN_MESH = 'SM_Screen_L';
+const SCREEN_MESH = 'SM_Screen_MFD1';
 
 /** Aufloesung der Displaytextur. */
 const SIZE = 256;

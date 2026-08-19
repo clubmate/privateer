@@ -139,12 +139,14 @@ weiterfliegt.
 - **Innenraum:** `public/models/ship-interior.glb` (aus Blender). Bis das Modell
   geladen ist — oder falls das Laden fehlschlaegt — steht ein prozeduraler
   Placeholder-Innenraum mit denselben Konventionen.
-- **Geometrie:** Das Modell ist einmal durch Blender gelaufen — Fasen an allen
-  sichtbaren Kanten (erst nach `remove_doubles`: der Ur-Export hatte pro
-  Flaeche eigene Vertices, damit findet ein Bevel keine gemeinsamen Kanten),
-  46 zusaetzliche Teile (Rohrbuendel, Handlauf, Lueftungsgitter, Wandkaesten,
-  Feuerloescher), ausgeduennte Kanzelstreben und der neue Augenpunkt. Details
-  in [`ASSET-NOTES.md`](ASSET-NOTES.md).
+- **Der Innenraum wird erzeugt, nicht modelliert:**
+  [`tools/build_interior.py`](tools/build_interior.py) baut ihn vollstaendig
+  parametrisch in Blender auf und exportiert das GLB. Stilrichtung „Used
+  Future": beige lackiertes Blech ueber sichtbarer Struktur, Spanten als
+  I-Profil, Sockelschraege und Hohlkehle statt rechter Winkel, Koje und
+  Spindbank in echten Wandnischen, zwei absichtlich defekte Deckenleuchten.
+  Kanten sind gefast und ab 35° weich schattiert. Details in
+  [`ASSET-NOTES.md`](ASSET-NOTES.md).
 - **Korrekturen beim Laden** (in `InteriorLoader`): Materialien auf `FrontSide`
   statt durchgehend `doubleSided`, buendig aufliegende Zierleisten und
   Aufkleber um 1,5 mm von ihrer Traegerflaeche weggerueckt — beides gegen das
@@ -198,6 +200,18 @@ Nachwuchs), Waffen (Feuerrate, Treffer, Origin-Sprung), Rumpfkollision
 Module, die ein Canvas oder WebGL brauchen, bleiben bewusst aussen vor; die
 Waffen haengen deshalb nur an der Schnittstelle `ImpactSink`, nicht am
 Effekt-Pool. `npm run build` laeuft die Tests mit.
+
+## Innenraum neu bauen
+
+```python
+# in Blender (Skripting-Konsole)
+exec(open('/pfad/zu/privateer/tools/build_interior.py').read())
+```
+
+Das Skript legt eine leere Szene an, baut Schale, Einrichtung, Leuchten und
+Kollisionsboxen auf, fast alle Kanten, und schreibt
+`public/models/ship-interior.glb`. Masse und Aufteilung stehen als Konstanten
+am Kopf der Datei.
 
 ## Weiterlesen
 
