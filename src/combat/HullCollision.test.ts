@@ -8,7 +8,10 @@ import { HullCollision } from './HullCollision';
  * keine feste Position, deshalb wird der Brocken danach dorthin gesetzt und
  * seine Drift genullt — so ist der Aufbau der Tests exakt beschreibbar.
  */
-function fieldWithSingleRock(distance = 500, radius = 20): { asteroids: Asteroids; center: Vector3 } {
+function fieldWithSingleRock(
+  distance = 500,
+  radius = 20,
+): { asteroids: Asteroids; center: Vector3; surface: number } {
   const asteroids = new Asteroids({ count: 1, minRadius: radius, maxRadius: radius, seed: 3 });
   const center = new Vector3(0, 0, -distance);
   // Zugriff auf die internen Reihen: im Test ist das der praeziseste Weg,
@@ -19,7 +22,12 @@ function fieldWithSingleRock(distance = 500, radius = 20): { asteroids: Asteroid
   };
   internals.positions[0]!.copy(center);
   internals.velocities[0]!.set(0, 0, 0);
-  return { asteroids, center };
+  // Brocken sind nicht rund: der Abstand der Oberflaeche vom Mittelpunkt
+  // haengt von der Richtung ab. Das Schiff kommt hier immer aus +z, also
+  // zaehlt der Radius in diese Richtung — nicht der Umriss.
+  const sample = { point: new Vector3(), normal: new Vector3() };
+  asteroids.sampleSurface(0, center.clone().add(new Vector3(0, 0, 100)), sample);
+  return { asteroids, center, surface: sample.point.distanceTo(center) };
 }
 
 function shipAt(x: number, y: number, z: number): Object3D {
@@ -66,7 +74,7 @@ describe('HullCollision', () => {
   });
 
   it('schiebt das Schiff aus dem Brocken heraus', () => {
-    const { asteroids, center } = fieldWithSingleRock(500, 20);
+    const { asteroids, center, surface } = fieldWithSingleRock(500, 20);
     const hull = new HullCollision(asteroids);
     const ship = shipAt(0, 0, -400);
     const velocity = new Vector3(0, 0, -100);
@@ -75,18 +83,18 @@ describe('HullCollision', () => {
     ship.position.set(0, 0, -500); // mitten im Brocken
     hull.update(1 / 120, ship, velocity);
 
-    const clearance = asteroids.getRadius(0) + hull.getParams().radius;
+    const clearance = surface + hull.getParams().radius;
     expect(ship.position.distanceTo(center)).toBeCloseTo(clearance, 3);
   });
 
   it('wirft das Schiff zurueck statt es durchfliegen zu lassen', () => {
-    const { asteroids } = fieldWithSingleRock(500, 20);
+    const { asteroids, surface } = fieldWithSingleRock(500, 20);
     const hull = new HullCollision(asteroids);
     const ship = shipAt(0, 0, -400);
     const velocity = new Vector3(0, 0, -100);
 
     hull.update(1 / 120, ship, velocity);
-    ship.position.set(0, 0, -480);
+    ship.position.set(0, 0, -500 + surface);
     hull.update(1 / 120, ship, velocity);
 
     expect(velocity.z).toBeGreaterThan(0); // Richtung umgekehrt
@@ -96,6 +104,7 @@ describe('HullCollision', () => {
   it('kostet Huelle — je schneller, desto mehr', () => {
     const slow = fieldWithSingleRock(500, 20);
     const fast = fieldWithSingleRock(500, 20);
+    const touch = -500 + slow.surface;
     const hullSlow = new HullCollision(slow.asteroids);
     const hullFast = new HullCollision(fast.asteroids);
 
@@ -103,7 +112,7 @@ describe('HullCollision', () => {
       const ship = shipAt(0, 0, -400);
       const velocity = new Vector3(0, 0, -speed);
       hull.update(1 / 120, ship, velocity);
-      ship.position.set(0, 0, -480);
+      ship.position.set(0, 0, touch);
       hull.update(1 / 120, ship, velocity);
       return hull.integrity;
     };
@@ -116,13 +125,13 @@ describe('HullCollision', () => {
   });
 
   it('laesst sanftes Anlegen ohne Schaden zu', () => {
-    const { asteroids } = fieldWithSingleRock(500, 20);
+    const { asteroids, surface } = fieldWithSingleRock(500, 20);
     const hull = new HullCollision(asteroids);
     const ship = shipAt(0, 0, -400);
     const velocity = new Vector3(0, 0, -3); // unter minImpactSpeed
 
     hull.update(1 / 120, ship, velocity);
-    ship.position.set(0, 0, -478);
+    ship.position.set(0, 0, -500 + surface + hull.getParams().radius - 0.5);
     const impact = hull.update(1 / 120, ship, velocity);
 
     expect(impact).not.toBeNull();
@@ -145,13 +154,13 @@ describe('HullCollision', () => {
   });
 
   it('repariert sich nach einer Weile Ruhe langsam selbst', () => {
-    const { asteroids } = fieldWithSingleRock(500, 20);
+    const { asteroids, surface } = fieldWithSingleRock(500, 20);
     const hull = new HullCollision(asteroids, null, { repairDelay: 2, repairRate: 0.1 });
     const ship = shipAt(0, 0, -400);
     const velocity = new Vector3(0, 0, -150);
 
     hull.update(1 / 120, ship, velocity);
-    ship.position.set(0, 0, -480);
+    ship.position.set(0, 0, -500 + surface);
     hull.update(1 / 120, ship, velocity);
     const damaged = hull.integrity;
     expect(damaged).toBeLessThan(1);
@@ -186,27 +195,28 @@ describe('HullCollision', () => {
   });
 
   it('laesst den eigenen Landeplatz in Ruhe', () => {
-    const { asteroids, center } = fieldWithSingleRock(500, 20);
+    const { asteroids, center, surface } = fieldWithSingleRock(500, 20);
     const hull = new HullCollision(asteroids);
     const ship = shipAt(0, 0, -400);
     const velocity = new Vector3(0, 0, -60);
+    // Dicht ueber der Oberflaeche — genau dort setzt der Landeautopilot auf.
+    const touchdown = -500 + surface + 0.2;
 
     hull.update(1 / 120, ship, velocity);
     hull.setExemptIndex(0);
-    // Bis auf Rumpfhoehe heran — genau das macht der Landeautopilot.
-    ship.position.set(0, 0, -478);
+    ship.position.set(0, 0, touchdown);
     expect(hull.update(1 / 120, ship, velocity)).toBeNull();
     expect(hull.integrity).toBe(1);
     // Und das Schiff bleibt, wo der Autopilot es hingesetzt hat.
-    expect(ship.position.z).toBe(-478);
+    expect(ship.position.z).toBe(touchdown);
     expect(velocity.z).toBe(-60);
 
     // Nach dem Abheben ist der Brocken wieder scharf.
     hull.setExemptIndex(-1);
-    ship.position.set(0, 0, -490);
+    ship.position.set(0, 0, touchdown - 12);
     expect(hull.update(1 / 120, ship, velocity)).not.toBeNull();
     expect(ship.position.distanceTo(center)).toBeCloseTo(
-      asteroids.getRadius(0) + hull.getParams().radius,
+      surface + hull.getParams().radius,
       3,
     );
   });

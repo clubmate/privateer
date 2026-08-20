@@ -111,17 +111,6 @@ const asteroids = new Asteroids();
 asteroids.setLayer(WORLD_LAYER);
 // --- Asteroidenfeld Ende ---
 
-// --- Landung ---
-// **Nur zur Abnahme.** Das heutige Feld erzeugt nichts groesser als 50 m, die
-// Klasse `huge` (ab 150 m) fehlt also komplett — und nur auf der laesst sich
-// landen. Zwei Planetoiden von Hand ins Feld setzen, damit es ueberhaupt einen
-// Landeplatz gibt. Faellt weg, sobald das neue Feld echte Grossbrocken liefert.
-import { addDebugPlanetoids } from './world/DebugPlanetoids';
-addDebugPlanetoids(asteroids, [
-  { position: new Vector3(0, -60, -900), radius: 300, spin: 0.05 },
-  { position: new Vector3(760, 90, -2000), radius: 190, spin: 0.08 },
-]);
-// --- Landung Ende ---
 
 const ship = new Ship();
 
