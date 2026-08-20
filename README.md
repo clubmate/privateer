@@ -46,9 +46,14 @@ QWERTY sind also identisch.
 | `X` | Full Stop — bremst auf 0 |
 | `V` | Flugmodus weiterschalten: **Arcade** → Newton + Assist → Newton frei |
 | `Tab` (halten) | Nachbrenner |
+| `G` | **Andocken** — Freigabe anfordern, Anflug abbrechen, spaeter ablegen |
+| `C` | **Aussenansicht** — Verfolgerkamera hinter dem Schiff |
+| `H` | Flache DOM-Hilfsanzeige ein/aus (die Instrumente sitzen im Cockpit) |
 | `F` | **Aufstehen** |
 
-Der Modus steht im Chip rechts unten im HUD.
+Der Flugmodus steht auf dem linken Cockpitschirm — die Instrumente sind Geraete
+im Raum, kein Overlay ueber dem Bild. `H` blendet zusaetzlich eine flache
+Ablesehilfe ein.
 
 ### Stehend — Gehen
 
@@ -57,6 +62,12 @@ Der Modus steht im Chip rechts unten im HUD.
 | Maus | Umsehen (Pitch auf ±89° begrenzt) |
 | `W` / `A` / `S` / `D` | Gehen, ca. 2,5 m/s, mit sanfter Beschleunigung |
 | `F` (in Sitznaehe, < 1,5 m) | **Hinsetzen** — das HUD blendet den Prompt ein |
+| `F` (an einer Klappe) | **Reparieren** — Fortschritt steht im Prompt, Weglaufen bricht ab |
+| `F` (an der Werkbank) | **Werkzeug nehmen** — ohne dauert jede Reparatur doppelt so lang |
+| `F` (am Kistenstapel) | **Frachtmanifest** — Ware, Tonnage, Einkaufspreis, freie Kapazitaet |
+
+Sitz, Klappen und Kisten teilen sich `F`; es gewinnt, was naeher ist (siehe
+`player/Interactables.ts`).
 
 Beim Gehen verschwinden Fadenkreuz, Steuerkreuz-Cursor und die
 Prograde-/Retrograde-Marker; die Geschwindigkeitsanzeige bleibt, weil das Schiff
