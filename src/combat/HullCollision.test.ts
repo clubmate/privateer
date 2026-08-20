@@ -184,4 +184,30 @@ describe('HullCollision', () => {
     expect(hull.update(1 / 120, ship, velocity)).toBeNull();
     expect(hull.integrity).toBe(1);
   });
+
+  it('laesst den eigenen Landeplatz in Ruhe', () => {
+    const { asteroids, center } = fieldWithSingleRock(500, 20);
+    const hull = new HullCollision(asteroids);
+    const ship = shipAt(0, 0, -400);
+    const velocity = new Vector3(0, 0, -60);
+
+    hull.update(1 / 120, ship, velocity);
+    hull.setExemptIndex(0);
+    // Bis auf Rumpfhoehe heran — genau das macht der Landeautopilot.
+    ship.position.set(0, 0, -478);
+    expect(hull.update(1 / 120, ship, velocity)).toBeNull();
+    expect(hull.integrity).toBe(1);
+    // Und das Schiff bleibt, wo der Autopilot es hingesetzt hat.
+    expect(ship.position.z).toBe(-478);
+    expect(velocity.z).toBe(-60);
+
+    // Nach dem Abheben ist der Brocken wieder scharf.
+    hull.setExemptIndex(-1);
+    ship.position.set(0, 0, -490);
+    expect(hull.update(1 / 120, ship, velocity)).not.toBeNull();
+    expect(ship.position.distanceTo(center)).toBeCloseTo(
+      asteroids.getRadius(0) + hull.getParams().radius,
+      3,
+    );
+  });
 });

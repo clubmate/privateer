@@ -80,6 +80,8 @@ export class HullCollision {
   private readonly params: HullParams;
   private readonly previous = new Vector3();
   private hasPrevious = false;
+  /** Brocken, der gerade Landeplatz ist und deshalb nicht trifft; -1 = keiner. */
+  private exemptIndex = -1;
 
   constructor(
     private readonly asteroids: Asteroids,
@@ -91,6 +93,17 @@ export class HullCollision {
 
   getParams(): Readonly<HullParams> {
     return this.params;
+  }
+
+  /**
+   * Einen Brocken von der Kollision ausnehmen — den, auf dem gerade gelandet
+   * wird. Anflug und Aufsetzen bringen das Schiff absichtlich bis auf
+   * Rumpfhoehe an den Fels heran; ohne diese Ausnahme wertete der Sweep genau
+   * das als Einschlag und die Landung zerlegte das Schiff. `-1` schaltet die
+   * Kollision wieder scharf.
+   */
+  setExemptIndex(index: number): void {
+    this.exemptIndex = index;
   }
 
   /**
@@ -135,6 +148,10 @@ export class HullCollision {
 
     const hit = this.asteroids.hitSegment(_from, _direction, length, this.params.radius);
     if (!hit) return null;
+    // Der eigene Landeplatz zaehlt nicht. Geprueft wird erst hier, nach der
+    // Sweep-Abfrage: `previous` steht dann bereits auf der neuen Position, der
+    // naechste Schritt beginnt also sauber.
+    if (hit.index === this.exemptIndex) return null;
 
     this.asteroids.getCenter(hit.index, _center);
     // Massgeblich ist die Position im Moment der Beruehrung, nicht die am
