@@ -175,7 +175,7 @@ export class StationPanel {
     if (this.open_) return;
     this.open_ = true;
     this.root.hidden = false;
-    this.setStatus({ ok: true, message: 'ANDOCKKLAMMERN VERRIEGELT · WILLKOMMEN AN BORD' });
+    this.setStatus({ ok: true, message: 'KLAMMERN VERRIEGELT' });
     this.refresh();
   }
 
