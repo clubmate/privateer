@@ -105,6 +105,9 @@ export class DamageLights {
     this.shafts.length = 0;
     this.emergency = null;
     this.warm = null;
+    // Die Zuordnung Kegel -> Lampe rechnet in Weltkoordinaten; der Raum ist
+    // gerade erst eingehaengt worden und hat noch keine gueltige Weltmatrix.
+    interior.updateMatrixWorld(true);
 
     const lights: PointLight[] = [];
     interior.traverse((object) => {
@@ -123,12 +126,7 @@ export class DamageLights {
         // Der Kegel wird nach dem Durchlauf einer Lampe zugeordnet; bis dahin
         // haengt er nur an der Grundhelligkeit.
         if (uniform) {
-          this.shafts.push({
-            uniform,
-            base: uniform.value,
-            position: object.getWorldPosition(new Vector3()),
-            lamp: null,
-          });
+          this.shafts.push({ uniform, base: uniform.value, position: worldCenter(object), lamp: null });
         }
         return;
       }
@@ -164,7 +162,7 @@ export class DamageLights {
         seed: this.random() * Math.PI * 2,
         outage: 0,
         value: 1,
-        position: object.getWorldPosition(new Vector3()),
+        position: worldCenter(object),
       });
     });
 
@@ -239,6 +237,21 @@ export class DamageLights {
         this.emergency.base * (emergency ? EMERGENCY_BOOST : 1);
     }
   }
+}
+
+/**
+ * Mittelpunkt eines Meshes in Weltkoordinaten.
+ *
+ * Ueber die Geometrie und nicht ueber `getWorldPosition()`: der Innenraum wird
+ * aus Blender mit eingebackenen Positionen exportiert (siehe
+ * `tools/build_interior.py`), alle Meshes sitzen deshalb im Ursprung. Ihr
+ * Abstand zueinander steckt allein in der Geometrie.
+ */
+function worldCenter(mesh: Mesh): Vector3 {
+  mesh.geometry.computeBoundingBox();
+  const box = mesh.geometry.boundingBox;
+  const center = box ? box.getCenter(new Vector3()) : new Vector3();
+  return center.applyMatrix4(mesh.matrixWorld);
 }
 
 /**

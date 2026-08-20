@@ -120,8 +120,8 @@ const STATUS_COLOR: Record<SystemStatus, number> = {
 /** Grundhelligkeit der Leiste je Status (heil leuchtet nur schwach mit). */
 const STATUS_EMISSIVE: Record<SystemStatus, number> = {
   ok: 0.25,
-  impaired: 2.2,
-  failed: 3.0,
+  impaired: 1.9,
+  failed: 2.4,
 };
 
 /** Pulsfrequenz der Leiste in Hz je Status. */
@@ -135,7 +135,7 @@ const STATUS_PULSE: Record<SystemStatus, number> = { ok: 0, impaired: 1.1, faile
  * mitleuchtet, sieht man aus dem Gang nicht nur *dass* etwas blinkt, sondern
  * auch *was* kaputt ist.
  */
-const LABEL_EMISSIVE: Record<SystemStatus, number> = { ok: 0.14, impaired: 0.75, failed: 1.1 };
+const LABEL_EMISSIVE: Record<SystemStatus, number> = { ok: 0.14, impaired: 0.6, failed: 0.8 };
 
 /**
  * Reichweite und Staerke des Lichts, das eine defekte Klappe in den Raum wirft.
@@ -149,7 +149,7 @@ const GLOW_DISTANCE = 3.4;
 const GLOW_INTENSITY: Record<SystemStatus, number> = { ok: 0, impaired: 1.15, failed: 2.0 };
 
 /** Funken pro Sekunde bei Ausfall bzw. Beeintraechtigung. */
-const SPARK_RATE: Record<SystemStatus, number> = { ok: 0, impaired: 5, failed: 26 };
+const SPARK_RATE: Record<SystemStatus, number> = { ok: 0, impaired: 7, failed: 40 };
 
 const _quat = new Quaternion();
 const _vec = new Vector3();
@@ -157,6 +157,7 @@ const _right = new Vector3();
 const _up = new Vector3();
 const _basis = new Matrix4();
 const _color = new Color();
+const WHITE = new Color(0xffffff);
 
 /**
  * Beschriftung als Blechschild. Ohne Text sieht jede Klappe aus wie jede
@@ -281,7 +282,7 @@ class Sparks {
     this.velocity[index * 3] = (random() - 0.5) * 1.1 + gravity.x * fall;
     this.velocity[index * 3 + 1] = (random() - 0.5) * 0.5 + gravity.y * fall;
     this.velocity[index * 3 + 2] = 0.35 + random() * 1.3 + gravity.z * fall;
-    this.life[index] = 0.2 + random() * 0.5;
+    this.life[index] = 0.16 + random() * 0.34;
   }
 }
 
@@ -397,9 +398,12 @@ export class RepairPanels {
       panel.status.color.copy(_color).multiplyScalar(0.25);
       panel.status.emissiveIntensity = (repairing ? 2.6 : STATUS_EMISSIVE[status]) * pulse;
 
-      // Der Name leuchtet mit, sobald etwas kaputt ist (siehe LABEL_EMISSIVE).
+      // Der Name leuchtet mit, sobald etwas kaputt ist (siehe LABEL_EMISSIVE),
+      // und zwar in der Statusfarbe: weiss glueht er zwar auch, sagt aber
+      // nichts, und er zieht dann mehr Aufmerksamkeit als die Leiste selbst.
       if (panel.label) {
-        panel.label.emissiveIntensity = repairing ? 0.9 : LABEL_EMISSIVE[status];
+        panel.label.emissiveIntensity = repairing ? 0.7 : LABEL_EMISSIVE[status];
+        panel.label.emissive.copy(_color).lerp(WHITE, 0.5);
       }
 
       // Die Klappe selbst glimmt in ihrer Statusfarbe an. Ohne das bleibt sie
@@ -505,7 +509,7 @@ export class RepairPanels {
     // Funken kommen aus dem Spalt unter der Statusleiste, nicht aus der ganzen
     // Klappe: ein Kurzschluss hat eine Stelle, ueber die Flaeche verteilt sieht
     // es aus wie Staub im Gegenlicht.
-    const sparks = new Sparks(28, [width * 0.5, height * 0.06], height * 0.16);
+    const sparks = new Sparks(40, [width * 0.5, height * 0.06], height * 0.16);
     group.add(sparks.points);
 
     // "Unten" der Welt in Panelkoordinaten: die Deckenklappe im Gang steht
