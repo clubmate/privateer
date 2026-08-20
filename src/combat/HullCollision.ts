@@ -1,4 +1,4 @@
-import { Vector3 } from 'three';
+import { Quaternion, Vector3 } from 'three';
 import type { Object3D } from 'three';
 import type { Asteroids } from '../world/Asteroids';
 import type { ImpactSink } from './Effects';
@@ -55,6 +55,13 @@ export interface Impact {
   damage: number;
   /** Wurde der Brocken dabei zertruemmert? */
   destroyed: boolean;
+  /**
+   * Einheitsvektor vom Schiffsmittelpunkt zur Einschlagstelle, **im
+   * Schiffssystem** (Nase -Z, oben +Y, Steuerbord +X). Das Schadensmodell
+   * verteilt danach: ein Schlag aufs Heck erwischt eher das Triebwerk als die
+   * Radarkeule in der Nase.
+   */
+  direction: Vector3;
 }
 
 const _from = new Vector3();
@@ -62,6 +69,7 @@ const _direction = new Vector3();
 const _normal = new Vector3();
 const _center = new Vector3();
 const _tangent = new Vector3();
+const _invQuat = new Quaternion();
 
 export class HullCollision {
   /** Huellenintegritaet 0..1. */
@@ -170,6 +178,12 @@ export class HullCollision {
       else this.effects.spawnImpact(hit.point, Math.min(hit.radius, 8));
     }
 
-    return { speed, damage, destroyed };
+    // `_normal` zeigt vom Brocken zum Schiff; die Trefferstelle liegt also in
+    // der Gegenrichtung. Umgerechnet ins Schiffssystem, weil dort "hinten" und
+    // "Steuerbord" ueberhaupt erst eine Bedeutung haben.
+    _invQuat.copy(ship.quaternion).invert();
+    const direction = _normal.clone().negate().applyQuaternion(_invQuat);
+
+    return { speed, damage, destroyed, direction };
   }
 }

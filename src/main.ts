@@ -33,11 +33,15 @@ import { CockpitDisplays } from './ship/CockpitDisplays';
 import { GlassHud } from './hud/GlassHud';
 // --- Cockpitanzeigen Ende ---
 import { createPostprocessing, DEEP_LAYER, WORLD_LAYER } from './render/Postprocessing';
+import { Interactables } from './player/Interactables';
 // --- Raumstation ---
 import { Station } from './world/Station';
 import { DockingController } from './world/DockingController';
 import { createCargoStationTrade } from './world/CargoStationTrade';
 // --- Raumstation Ende ---
+// --- Schadensmodell ---
+import { DamageModel } from './systems/DamageModel';
+// --- Schadensmodell Ende ---
 
 const container = document.getElementById('app');
 if (!container) throw new Error('#app fehlt in index.html');
@@ -153,18 +157,18 @@ const hud = new Hud();
 // vom Sitzmarker ans Schiffs-Rig.
 const walk = new WalkController(input, ship);
 
+// Ein gemeinsames Register fuer alles, was man an Bord anfassen kann:
+// Frachtkisten, Reparaturklappen, Werkzeug. PlayerState kennt genau eines —
+// zwei Register hiessen, dass die Haelfte der Prompts nie erscheint.
+const interactables = new Interactables();
+
 // --- Fracht ---
 // Gekaufte Ware liegt als echte Kiste im begehbaren Laderaum: voll beladen
 // quetscht man sich nach achtern durch, und das Schiff fliegt traeger. Der
 // Aufbau steht komplett in setupCargo(), hier haengt er nur ein.
 import { setupCargo } from './cargo/setupCargo';
-const cargo = setupCargo({ ship, walk, flight, renderer });
+const cargo = setupCargo({ ship, walk, flight, renderer, interactables });
 // --- /Fracht ---
-
-const player = new PlayerState({
-  input, ship, camera, seated, walk, hud,
-  interactables: cargo.interactables,
-});
 
 // --- Raumstation ---
 // Handelsposten gut 13 km voraus, seitlich am Asteroidenfeld vorbei. Das Maul
@@ -225,6 +229,17 @@ function updateExteriorView(dt: number): void {
   exterior?.update(dt, flight);
 }
 // --- Ende Aussenansicht ---
+// --- Schadensmodell ---
+// Subsysteme, Reparaturklappen an Bord und die Warntafel im Cockpit. Der
+// Innenraum wird in `loadShipInterior().then()` nachgereicht, die Hooks liegen
+// in `fixedUpdate` (Treffer) und in der Spielschleife (Darstellung).
+const damage = new DamageModel({ flight, weapons, targeting, interactables });
+// --- /Schadensmodell ---
+
+
+const player = new PlayerState({
+  input, ship, camera, seated, walk, hud, interactables,
+});
 
 // ------------------------------------------------------- Innenraum aus Blender
 // Die Innenraummaterialien sind stark metallisch und brauchen eine
@@ -243,6 +258,8 @@ loadShipInterior(`${import.meta.env.BASE_URL}models/ship-interior.glb`, interior
     // --- Cockpitanzeigen ---
     displays.attachTo(interior);
     // --- Cockpitanzeigen Ende ---
+    // Schadensmodell: Reparaturklappen, Lampensteuerung, Warntafel.
+    damage.attachInterior(interior);
     // Kamera haengt noch am alten Sitzmarker und muss neu angebunden werden;
     // ausserdem brauchen die Kollisionsboxen die neuen COL_-Meshes.
     player.refreshInterior();
@@ -307,6 +324,8 @@ function fixedUpdate(dt: number): void {
   // Schrittes und wirft die Geschwindigkeit zurueck.
   const impact = hull.update(dt, ship, flight.velocity);
   if (impact) shake.add(0.25 + impact.damage * 3);
+  // Schadensmodell: Treffer auf die Subsysteme verteilen, Luft mitfuehren.
+  damage.fixedUpdate(dt, impact);
   effects.update(dt);
   applyFloatingOrigin();
 }
@@ -402,6 +421,10 @@ renderer.setAnimationLoop(() => {
       input.pointerLocked &&
       (input.isMouseDown(0) || input.isDown('Space')),
   );
+  // Schadensmodell: Faktoren fuer Flug/Waffen setzen, Panels und Warntafel
+  // darstellen. Vor dem Physikschritt, damit die Faktoren im selben Frame
+  // wirken; beim Sitzen bricht `null` eine laufende Reparatur ab.
+  damage.update(time.frameDelta, player.isWalking ? walk.position : null);
   const dt = time.tick(fixedUpdate);
   render(dt);
   input.endFrame();
@@ -427,6 +450,6 @@ Object.assign(window as unknown as Record<string, unknown>, {
     ship, flight, seated, walk, player, hud, camera, input, scene,
     weapons, effects, asteroids, targeting, hull, shake, radar,
     post, renderer, displays, glass, cargo,
-    station, docking, trade,
+    station, docking, trade, damage, interactables,
   },
 });

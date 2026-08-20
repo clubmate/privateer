@@ -38,6 +38,12 @@ export interface SetupCargoOptions extends CargoHoldOptions {
   renderer: ShadowMapOwner;
   /** Startladung; leeres Array startet mit leerem Laderaum. */
   initialLoad?: ReadonlyArray<[GoodId, number]>;
+  /**
+   * Register fuer die Interaktion am Stapel. An Bord gibt es genau eines —
+   * auch das Schadensmodell meldet seine Klappen dort an, und `PlayerState`
+   * fragt nur ein einziges ab.
+   */
+  interactables?: Interactables;
 }
 
 export interface CargoSystem {
@@ -57,7 +63,7 @@ export interface CargoSystem {
 export function setupCargo(options: SetupCargoOptions): CargoSystem {
   const { ship, walk, flight, renderer } = options;
   const hold = new CargoHold(options);
-  const interactables = new Interactables();
+  const interactables = options.interactables ?? new Interactables();
 
   const visuals = new CargoVisuals({
     hold,

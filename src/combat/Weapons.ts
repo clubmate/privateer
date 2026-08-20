@@ -50,6 +50,21 @@ export const DEFAULT_WEAPON_PARAMS: WeaponParams = {
   ],
 };
 
+/**
+ * Auswirkung von Bordschaden auf die Kanonen. Wie beim Flugmodell reine
+ * Faktoren von aussen (siehe `systems/Systems.ts`), damit die Waffenlogik
+ * nichts ueber Subsysteme wissen muss.
+ */
+export interface WeaponDamage {
+  /** Faktor auf die Nachladezeit; 1 = heil. */
+  reload: number;
+  /** Wie viele Muendungen noch feuern; 0 = Totalausfall. */
+  activeGuns: number;
+}
+
+/** Alles heil. */
+export const NO_WEAPON_DAMAGE: WeaponDamage = { reload: 1, activeGuns: Infinity };
+
 /** Maximal gleichzeitig fliegende Geschosse. */
 const POOL_SIZE = 64;
 
@@ -88,6 +103,7 @@ export class Weapons {
 
   private readonly bolts: Bolt[] = [];
   private readonly params: WeaponParams;
+  private damage: WeaponDamage = { ...NO_WEAPON_DAMAGE };
   private cooldown = 0;
   private nextPort = 0;
   private triggerHeld = false;
@@ -123,6 +139,20 @@ export class Weapons {
     return this.params;
   }
 
+  /** Schadensfaktoren setzen (siehe {@link WeaponDamage}). */
+  setDamage(damage: Partial<WeaponDamage>): void {
+    this.damage = { ...NO_WEAPON_DAMAGE, ...damage };
+  }
+
+  getDamage(): Readonly<WeaponDamage> {
+    return this.damage;
+  }
+
+  /** Wie viele Muendungen aktuell feuern. */
+  getActiveGuns(): number {
+    return Math.max(0, Math.min(this.damage.activeGuns, this.params.ports.length));
+  }
+
   /** Abzug halten (einmal pro Frame gesetzt). */
   setTrigger(held: boolean): void {
     this.triggerHeld = held;
@@ -141,9 +171,9 @@ export class Weapons {
   update(dt: number, ship: Object3D, shipVelocity: Vector3): void {
     this.sinceHit += dt;
     this.cooldown -= dt;
-    if (this.triggerHeld && this.cooldown <= 0) {
+    if (this.triggerHeld && this.cooldown <= 0 && this.getActiveGuns() > 0) {
       this.fire(ship, shipVelocity);
-      this.cooldown = this.params.fireInterval;
+      this.cooldown = this.params.fireInterval * this.damage.reload;
     }
 
     for (let i = 0; i < this.bolts.length; i++) {
@@ -192,7 +222,9 @@ export class Weapons {
     const index = this.bolts.findIndex((bolt) => bolt.remaining <= 0);
     if (index < 0) return; // Pool erschoepft — lieber nichts als flackern
 
-    const port = this.params.ports[this.nextPort % this.params.ports.length]!;
+    // Bei ausgefallener Kanone wird nur noch aus den verbliebenen Muendungen
+    // geschossen; der Wechsel laeuft dann eben ueber eine einzige.
+    const port = this.params.ports[this.nextPort % this.getActiveGuns()]!;
     this.nextPort++;
 
     ship.updateMatrixWorld();
