@@ -85,16 +85,22 @@ function hitpointsFor(radius: number): number {
 }
 
 /**
- * Formvielfalt der Instanzstapel. Mehr Varianten heissen mehr Zeichenaufrufe,
- * weniger heisst sichtbare Wiederholung; acht kleine und sechs mittlere
- * treffen das gut, weil Lage, Groesse und Inhalt zusaetzlich streuen.
+ * Die drei Instanzklassen: je Formvariante ein Stapel und ein Zeichenaufruf.
+ *
+ * `detail` sind Unterteilungen der Icosphere (1 = 80 Dreiecke, 2 = 320,
+ * 3 = 1280, 4 = 5120). Die Aufloesung folgt dem, wie nah man einer Klasse
+ * ueblicherweise kommt: an einem Felsen von 50 m schwebt man beim Foerdern,
+ * ein Geroellbrocken von drei Metern huscht vorbei. `variants` steuert die
+ * Wiederholung — mehr Formen heissen mehr Zeichenaufrufe, weniger heisst
+ * sichtbares Muster; Lage, Groesse und Inhalt streuen zusaetzlich.
  */
-const SMALL_VARIANTS = 8;
-const MEDIUM_VARIANTS = 6;
+const TIERS: readonly { size: AsteroidSize; variants: number; detail: number }[] = [
+  { size: 'pebble', variants: 5, detail: 1 },
+  { size: 'small', variants: 8, detail: 3 },
+  { size: 'medium', variants: 6, detail: 4 },
+];
 
-/** Unterteilungen der Icosphere je Stufe (2 = 320 Dreiecke, 5 = 20480). */
-const DETAIL_SMALL = 2;
-const DETAIL_MEDIUM = 3;
+/** Detailstufen der Grossbrocken, fein nach grob. */
 const DETAIL_LARGE = [4, 2];
 const DETAIL_HUGE = [5, 3];
 
@@ -398,19 +404,19 @@ export class Asteroids extends Group implements AsteroidField {
    * seine eigene.
    */
   private buildMeshes(): void {
-    const small: RockShape[] = [];
-    const medium: RockShape[] = [];
     const seed = this.options.seed;
-    // Varianten gleichmaessig ueber die Familien der Klasse verteilen, nicht
-    // zufaellig: bei acht Formen faellt jede Wiederholung auf.
-    for (let v = 0; v < SMALL_VARIANTS; v++) {
-      small.push(new RockShape(archetypeFor('small', v / SMALL_VARIANTS), seed * 31 + v * 17 + 3));
-    }
-    for (let v = 0; v < MEDIUM_VARIANTS; v++) {
-      medium.push(
-        new RockShape(archetypeFor('medium', v / MEDIUM_VARIANTS), seed * 47 + v * 23 + 101),
-      );
-    }
+    // Formvorrat je Instanzklasse. Varianten gleichmaessig ueber die Familien
+    // der Klasse verteilen, nicht zufaellig: bei acht Formen faellt jede
+    // Wiederholung auf.
+    const pools: RockShape[][] = TIERS.map((tier, t) => {
+      const shapes: RockShape[] = [];
+      for (let v = 0; v < tier.variants; v++) {
+        shapes.push(
+          new RockShape(archetypeFor(tier.size, v / tier.variants), seed * (31 + t * 16) + v * 17 + 3),
+        );
+      }
+      return shapes;
+    });
 
     // Erst zuordnen, dann zaehlen: ein Stapel braucht seine Groesse vorab.
     const variantOf: number[] = [];
@@ -420,8 +426,11 @@ export class Asteroids extends Group implements AsteroidField {
         variantOf.push(-1);
         continue;
       }
-      const kind = this.sizes[i] === 'medium' ? 1 : 0;
-      const pool = kind === 1 ? medium : small;
+      const kind = Math.max(
+        TIERS.findIndex((tier) => tier.size === this.sizes[i]),
+        0,
+      );
+      const pool = pools[kind]!;
       const variant = Math.min(Math.floor(this.rng() * pool.length), pool.length - 1);
       const id = kind * 100 + variant;
       variantOf.push(id);
@@ -432,10 +441,13 @@ export class Asteroids extends Group implements AsteroidField {
     const batches = new Map<number, RockBatch>();
     const used = new Map<number, number>();
     for (const [id, size] of capacity) {
-      const pool = Math.floor(id / 100) === 1 ? medium : small;
-      const detail = Math.floor(id / 100) === 1 ? DETAIL_MEDIUM : DETAIL_SMALL;
-      const shape = pool[id % 100]!;
-      const batch = new RockBatch(buildRockGeometry(shape, detail), this.material, size);
+      const kind = Math.floor(id / 100);
+      const shape = pools[kind]![id % 100]!;
+      const batch = new RockBatch(
+        buildRockGeometry(shape, TIERS[kind]!.detail),
+        this.material,
+        size,
+      );
       // Die Stapel decken das ganze Feld ab — als Ganzes liegt da nie etwas
       // ausserhalb des Sichtkegels, die Pruefung waere verschenkte Zeit.
       batch.mesh.frustumCulled = false;

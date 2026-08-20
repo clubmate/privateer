@@ -158,12 +158,12 @@ export class RockShape {
   private readonly ridgeAmp: number;
   private readonly ridgeFreq: number;
   private readonly grainAmp: number;
-  private readonly veinFreq: number;
-  private readonly veinSharp: number;
-  private readonly veinStretch: number;
   private readonly mottleFreq: number;
   /** Oktaven der Grundstoerung — bei Grossbrocken eine weniger. */
   private octaves = 3;
+  /** Rauheit der Bruchflaechen (wirkt erst nach dem Schnitt). */
+  private chipAmp = 0.055;
+  private readonly chipFreq: number;
   private readonly seed: number;
 
   /** Faktor, der den groessten Radius auf 1 zieht. */
@@ -279,7 +279,7 @@ export class RockShape {
       const z = range(-1, 1);
       const l = Math.hypot(x, y, z) || 1;
       this.cutN.set([x / l, y / l, z / l], i * 3);
-      this.cutD[i] = archetype === 'shard' ? range(0.46, 0.74) : range(0.52, 0.86);
+      this.cutD[i] = archetype === 'shard' ? range(0.55, 0.8) : range(0.52, 0.86);
     }
 
     // Grossbrocken bekommen eine zweite, kleinere Kraterlage. Sie traegt die
@@ -320,18 +320,15 @@ export class RockShape {
       // Und eine Oktave weniger, aus demselben Grund: die dritte liegt bei
       // einem Planetoiden schon unterhalb der Dreiecksgroesse.
       this.octaves = 2;
+      this.chipAmp = 0.03;
       // Grate wirken auf einem Grossbrocken wie Stofffalten: hundert Meter
       // lange, scharfe Ruecken gibt es an keinem Fels. Auf dem Splitter, wo
       // sie zentimeterbreit sind, bleiben sie.
       this.ridgeAmp *= 0.35;
     }
 
-    this.veinFreq = range(3.5, 6.5);
-    // Scharf heisst duenn: breite Baender lesen sich als Farbflecken, nicht
-    // als Adern — und dann sieht ein Brocken gescheckt aus statt mineralisch.
-    this.veinSharp = range(9, 15);
-    this.veinStretch = range(0.25, 0.6);
     this.mottleFreq = range(1.6, 2.6);
+    this.chipFreq = range(6, 9);
 
     this.measure();
   }
@@ -347,24 +344,6 @@ export class RockShape {
    */
   radius(x: number, y: number, z: number): number {
     return this.raw(x, y, z) * this.norm;
-  }
-
-  /**
-   * Adernmaske 0..1. Baender dort, wo das Rauschen seine Mitte kreuzt — das
-   * liest sich wie Erz, das in Spalten kristallisiert ist, und nicht wie
-   * Flecken.
-   */
-  vein(x: number, y: number, z: number): number {
-    const s = this.seed;
-    const f = this.veinFreq;
-    // Gestauchte Achsen: Adern ziehen sich in eine Richtung, statt zu tupfen.
-    const n = fbm3(x * f + s, y * f * this.veinStretch - s, z * f + s * 0.5, 3);
-    let band = 1 - Math.min(Math.abs(n - 0.5) * this.veinSharp, 1);
-    band *= band;
-    // Zweite Lage: vereinzelte Einschluesse, damit nicht alles gestreift ist.
-    const blob = noise3(x * 3.4 - s, y * 3.4 + s, z * 3.4 + s);
-    const spot = Math.max(0, (blob - 0.74) * 3.2);
-    return Math.min(band * 0.8 + spot * 0.5, 1);
   }
 
   /**
@@ -428,6 +407,14 @@ export class RockShape {
       if (d <= 1e-3) continue;
       const limit = this.cutD[i]! / d;
       if (limit < r) r = limit;
+    }
+
+    // Eine Bruchflaeche ist nicht poliert. Ohne diese Stoerung *nach* dem
+    // Schnitt bleibt die Ebene mathematisch eben — und eine mathematisch
+    // ebene Flaeche mit Farbmaserung darauf sieht aus wie bemalte Pappe.
+    if (this.cutCount > 0) {
+      const cf = this.chipFreq;
+      r *= 1 + (fbm3(x * cf + s * 0.3, y * cf - s * 1.1, z * cf + s * 0.9, 2) - 0.5) * this.chipAmp;
     }
 
     // Krater: Schuessel innen, Wall aussen. Die Wirkung ist relativ, damit ein
@@ -495,16 +482,16 @@ export class RockShape {
  * Mesh zu einer Form. `detail` ist die Zahl der Unterteilungen (2 = 320
  * Dreiecke, 3 = 1280, 4 = 5120, 5 = 20480).
  *
- * Neben Position und Normale traegt die Geometrie `aRockDetail`: Adernmaske,
- * Muldentiefe und Fleckigkeit. Alle drei werden im Shader mit den
- * Instanzfarben verrechnet — so zeigt dieselbe Geometrie einmal einen
- * Eisbrocken und einmal eine Kupferader.
+ * Neben Position und Normale traegt die Geometrie `aRockDetail`: Muldentiefe
+ * und Fleckigkeit. Beides gehoert zur *Form* und wechselt nicht mit dem
+ * Inhalt. Die Adern dagegen rechnet der Shader je Bildpunkt — auf einem
+ * Brocken mit 320 Dreiecken waeren sie sonst Polygonflecken.
  */
 export function buildRockGeometry(shape: RockShape, detail: number): BufferGeometry {
   const { dirs, index } = icosphere(detail);
   const points = dirs.length / 3;
   const position = new Float32Array(dirs.length);
-  const rockDetail = new Float32Array(points * 3);
+  const rockDetail = new Float32Array(points * 2);
 
   for (let i = 0; i < points; i++) {
     const x = dirs[i * 3]!;
@@ -514,14 +501,13 @@ export function buildRockGeometry(shape: RockShape, detail: number): BufferGeome
     position[i * 3] = x * r;
     position[i * 3 + 1] = y * r;
     position[i * 3 + 2] = z * r;
-    rockDetail[i * 3] = shape.vein(x, y, z);
-    rockDetail[i * 3 + 1] = shape.cavity(x, y, z);
-    rockDetail[i * 3 + 2] = shape.mottle(x, y, z);
+    rockDetail[i * 2] = shape.cavity(x, y, z);
+    rockDetail[i * 2 + 1] = shape.mottle(x, y, z);
   }
 
   let geometry = new BufferGeometry();
   geometry.setAttribute('position', new BufferAttribute(position, 3));
-  geometry.setAttribute('aRockDetail', new BufferAttribute(rockDetail, 3));
+  geometry.setAttribute('aRockDetail', new BufferAttribute(rockDetail, 2));
   geometry.setIndex(new BufferAttribute(index, 1));
 
   // Flach schattiert wird nur das Kleinzeug. Bei einem Grossbrocken mit

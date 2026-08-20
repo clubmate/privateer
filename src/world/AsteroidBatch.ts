@@ -15,10 +15,11 @@ import { MINERALS, type MineralId } from './AsteroidTypes';
  *
  * **Warum ein eigener Shader:** der Inhalt eines Brockens soll sichtbar sein,
  * ohne dass jeder Brocken eine eigene Textur oder ein eigenes Material
- * bekommt. Die Geometrie liefert deshalb nur, *wo* Adern und Mulden liegen
- * (`aRockDetail`), die Instanz liefert, *welche Farbe* sie haben. So teilen
- * sich hunderte Brocken ein Material und einen Zeichenaufruf, und trotzdem
- * ist ein Eisbrocken von einer Kupferader zu unterscheiden.
+ * bekommt. Die Geometrie liefert deshalb nur, was zur *Form* gehoert (Mulden
+ * und Fleckigkeit), die Instanz liefert die Farben des Inhalts, und das
+ * Adernmuster entsteht je Bildpunkt. So teilen sich hunderte Brocken ein
+ * Material und einen Zeichenaufruf, und trotzdem ist ein Eisbrocken von einer
+ * Kupferader zu unterscheiden.
  *
  * Dazu kommt feines Rauschen im Fragment: Geometrie kann die Koernung eines
  * 400-m-Planetoiden nicht tragen (ein Dreieck ist dort 14 m breit), aus der
@@ -42,8 +43,8 @@ import { MINERALS, type MineralId } from './AsteroidTypes';
  */
 const RELIEF = [
   { scale: 0.09, near: 400, far: 1100, strength: 0.26 }, // gut 10 m: Mittelform
-  { scale: 0.33, near: 110, far: 320, strength: 0.2 }, // 3 m: Buckel und Rinnen
-  { scale: 1.3, near: 30, far: 95, strength: 0.22 }, // 0,8 m: Koernung
+  { scale: 0.33, near: 110, far: 320, strength: 0.3 }, // 3 m: Buckel und Rinnen
+  { scale: 1.3, near: 30, far: 95, strength: 0.3 }, // 0,8 m: Koernung
 ];
 
 /**
@@ -54,7 +55,18 @@ const RELIEF = [
 const DUST_SCALE = 0.55;
 const DUST_NEAR = 160;
 const DUST_FAR = 480;
-const DUST_STRENGTH = 0.5;
+const DUST_STRENGTH = 0.42;
+
+/**
+ * Adern: wieviele Baender ueber den Brocken laufen und wie duenn sie sind.
+ * Duenn ist wichtig — breite Baender lesen sich als Anstrich, nicht als Erz,
+ * und dann braucht niemand mehr einen Scanner.
+ */
+const VEIN_FREQ = 4.5;
+const VEIN_SHARP = 13.0;
+
+/** Wellenlaenge, mit der die Adern ausgefranst werden (in Metern). */
+const VEIN_GRIT = 0.8;
 
 /**
  * Sternen- und Planetenlicht. Die Fuelllampe der Szene liegt in der
@@ -72,15 +84,20 @@ const METAL: Partial<Record<MineralId, number>> = {
   silicon: 0.2,
 };
 
-/** Wie deutlich die Adern durchschlagen. Taubes Gestein bleibt langweilig. */
+/**
+ * Wie deutlich die Adern durchschlagen. Bewusst weit unter 1: bei voller
+ * Maske ersetzt die Aderfarbe das Gestein, und dann sieht ein Brocken
+ * angemalt aus statt mineralisch. Taubes Gestein bleibt langweilig — der
+ * Scanner soll etwas zu tun behalten.
+ */
 const VEIN_POWER: Record<MineralId, number> = {
-  rock: 0.35,
-  iron: 1.0,
-  ice: 1.15,
-  copper: 0.95,
-  silicon: 0.9,
-  platinum: 0.85,
-  crystal: 1.2,
+  rock: 0.22,
+  iron: 0.68,
+  ice: 0.8,
+  copper: 0.64,
+  silicon: 0.6,
+  platinum: 0.58,
+  crystal: 0.72,
 };
 
 /** Grundrauheit je Mineral — Eis ist glatt, Gestein stumpf. */
@@ -109,44 +126,56 @@ export function createRockMaterial(): MeshStandardMaterial {
       .replace(
         '#include <common>',
         `#include <common>
-        attribute vec3 aRockDetail;   // x: Adern, y: Mulde, z: Flecken
+        attribute vec2 aRockDetail;   // x: Mulde, y: Flecken
         attribute vec3 aRock;
         attribute vec3 aVein;
         attribute vec4 aRockMod;      // Aderstaerke, Leuchten, Rauheit, Metall
-        varying vec3 vRockColor;
-        varying vec3 vRockGlow;
-        varying vec2 vRockSurf;
-        varying vec3 vRockPos;`,
+        varying vec3 vRockBase;
+        varying vec3 vRockVein;
+        varying vec4 vRockMod;
+        varying vec3 vRockPos;
+        varying vec3 vRockDir;
+        varying float vRockSeed;`,
       )
       .replace(
         '#include <begin_vertex>',
         `#include <begin_vertex>
-        float veinMask = clamp(aRockDetail.x * aRockMod.x, 0.0, 1.0);
-        float cavity = aRockDetail.y;
-        // In den Mulden liegt Schutt: er deckt die Adern zu und schluckt Licht.
-        veinMask *= 1.0 - cavity * 0.7;
+        float cavity = aRockDetail.x;
         // Grossflaeckige Helligkeitsflecken — Fels ist nie einfarbig.
-        float mottle = 0.70 + aRockDetail.z * 0.42;
-        vRockColor = mix(aRock * mottle, aVein, veinMask) * (1.0 - cavity * 0.38);
-        vRockGlow = aVein * (veinMask * aRockMod.y);
-        vRockSurf = vec2(mix(aRockMod.z, aRockMod.z * 0.6, veinMask), aRockMod.w * veinMask);
+        float mottle = 0.70 + aRockDetail.y * 0.42;
+        // In den Mulden liegt Schutt: dunkler, und er deckt die Adern zu.
+        vRockBase = aRock * mottle * (1.0 - cavity * 0.38);
+        vRockVein = aVein;
+        vRockMod = vec4(aRockMod.x * (1.0 - cavity * 0.7), aRockMod.yzw);
         float rockScale = length(modelMatrix[0].xyz);
         #ifdef USE_INSTANCING
           rockScale *= length(instanceMatrix[0].xyz);
         #endif
         // Ortsfest am Brocken und in Metern: die Koernung dreht sich mit und
         // ist auf dem Geroell so gross wie auf dem Planetoiden.
-        vRockPos = transformed * rockScale;`,
+        vRockPos = transformed * rockScale;
+        // Richtung im Brockensystem: darauf sitzt das Adernmuster, damit es
+        // unabhaengig von der Brockengroesse gleich viele Baender hat.
+        vRockDir = normalize(transformed);
+        // Jede Instanz bekommt ihr eigenes Muster. Der Versatz kommt aus der
+        // Instanzlage — die ist feldlokal und wandert nicht mit dem
+        // verschobenen Ursprung, das Muster bleibt also stehen.
+        vRockSeed = 0.0;
+        #ifdef USE_INSTANCING
+          vRockSeed = dot(instanceMatrix[3].xyz, vec3(0.317, 0.113, 0.271));
+        #endif`,
       );
 
     shader.fragmentShader = shader.fragmentShader
       .replace(
         '#include <common>',
         `#include <common>
-        varying vec3 vRockColor;
-        varying vec3 vRockGlow;
-        varying vec2 vRockSurf;
+        varying vec3 vRockBase;
+        varying vec3 vRockVein;
+        varying vec4 vRockMod;
         varying vec3 vRockPos;
+        varying vec3 vRockDir;
+        varying float vRockSeed;
 
         float rockHash(vec3 p) {
           p = fract(p * 0.3183099 + vec3(0.71, 0.113, 0.419));
@@ -165,6 +194,20 @@ export function createRockMaterial(): MeshStandardMaterial {
                 mix(rockHash(i + vec3(0,1,1)), rockHash(i + vec3(1,1,1)), f.x), f.y), f.z);
         }
 
+        /**
+         * Adernmaske: duenne Baender dort, wo das Rauschen seine Mitte
+         * kreuzt. Im Fragment gerechnet, nicht je Vertex — auf einem Brocken
+         * mit 320 Dreiecken wuerden aus Adern sonst Polygonflecken.
+         */
+        float rockVeinMask(vec3 dir, float seed) {
+          vec3 p = dir * ${VEIN_FREQ.toFixed(2)} + seed;
+          // Gestaucht in eine Richtung: Adern ziehen sich, statt zu tupfen.
+          p.y *= 0.4;
+          float n = rockNoise(p) * 0.62 + rockNoise(p * 2.3) * 0.38;
+          float band = 1.0 - min(abs(n - 0.5) * ${VEIN_SHARP.toFixed(1)}, 1.0);
+          return band * band;
+        }
+
         /** Anstieg des Rauschens, normiert auf die Schrittweite. */
         vec3 rockGradient(vec3 p) {
           const float e = 0.5;
@@ -178,7 +221,12 @@ export function createRockMaterial(): MeshStandardMaterial {
       .replace(
         '#include <color_fragment>',
         `#include <color_fragment>
-        diffuseColor.rgb *= vRockColor;
+        float veinMask = clamp(rockVeinMask(vRockDir, vRockSeed) * vRockMod.x, 0.0, 1.0);
+        // Ausgefranst: eine glatte Maske liest sich als Anstrich. Erz sitzt in
+        // Spalten und Koernern, also frisst feines Rauschen die Raender an.
+        veinMask *= 0.45 + 1.0 * rockNoise(vRockPos * ${VEIN_GRIT.toFixed(2)});
+        vec3 rockColor = mix(vRockBase, vRockVein, veinMask);
+        diffuseColor.rgb *= rockColor;
         float rockDist = length(vViewPosition);
         float rockDust = 1.0 - smoothstep(${DUST_NEAR.toFixed(1)}, ${DUST_FAR.toFixed(1)}, rockDist);
         if (rockDust > 0.01) {
@@ -189,12 +237,12 @@ export function createRockMaterial(): MeshStandardMaterial {
       .replace(
         '#include <roughnessmap_fragment>',
         `#include <roughnessmap_fragment>
-        roughnessFactor = vRockSurf.x;`,
+        roughnessFactor = mix(vRockMod.z, vRockMod.z * 0.6, veinMask);`,
       )
       .replace(
         '#include <metalnessmap_fragment>',
         `#include <metalnessmap_fragment>
-        metalnessFactor = vRockSurf.y;`,
+        metalnessFactor = vRockMod.w * veinMask;`,
       )
       .replace(
         '#include <normal_fragment_maps>',
@@ -215,7 +263,8 @@ ${RELIEF.map(
       .replace(
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
-        totalEmissiveRadiance += vRockGlow + vRockColor * ${STARLIGHT.toFixed(3)};`,
+        totalEmissiveRadiance += vRockVein * (veinMask * vRockMod.y)
+          + rockColor * ${STARLIGHT.toFixed(3)};`,
       );
   };
 
@@ -275,7 +324,7 @@ export class RockBatch {
     this.mod.setXYZW(
       slot,
       VEIN_POWER[mineral],
-      info.veinEmissive ? 0.85 : 0,
+      info.veinEmissive ? 0.5 : 0,
       ROUGHNESS[mineral] ?? 0.95,
       METAL[mineral] ?? 0,
     );

@@ -332,9 +332,10 @@ describe('Asteroiden — Formen', () => {
       const centroid = a.clone().add(b).add(c).divideScalar(3);
       expect(normal.dot(centroid)).toBeGreaterThan(0);
     }
-    // Adern, Mulden und Flecken liegen als Attribut bereit.
+    // Mulden und Fleckigkeit liegen als Attribut bereit (die Adern rechnet
+    // der Shader je Bildpunkt).
     const detail = geometry.attributes['aRockDetail']!;
-    expect(detail.itemSize).toBe(3);
+    expect(detail.itemSize).toBe(2);
     expect(detail.count).toBe(position.count);
   });
 
