@@ -7,6 +7,7 @@ import {
   Color,
   DoubleSide,
   Group,
+  Matrix4,
   Mesh,
   MeshStandardMaterial,
   Object3D,
@@ -46,21 +47,42 @@ export interface PanelPlacement {
   facing: readonly [number, number, number];
   /** Breite und Hoehe der Frontplatte in Metern. */
   size: readonly [number, number];
+  /**
+   * Wohin die Oberkante des Schildes zeigt, in GLB-Koordinaten. Nur noetig,
+   * wenn `facing` senkrecht steht (Decke, Boden): dort ist "oben" nicht mehr
+   * durch die Weltachse bestimmt, und ohne Angabe steht die Beschriftung je
+   * nach Anlaufrichtung auf dem Kopf.
+   */
+  up?: readonly [number, number, number];
   /** Reichweite der Interaktion; Standard aus `Interactables`. */
   range?: number;
 }
 
 /**
  * Wo welches System aufzumachen ist. Die Zahlen sind an den Modellmassen
- * ausgerichtet (Wandinnenflaechen, Spanten, Kisten) — jedes Panel sitzt in
- * einer Luecke zwischen den Spanten, nicht darueber.
+ * ausgerichtet (siehe `tools/build_interior.py`): Gang halbe Breite 0.70 mit
+ * Spanten bei z = -0.75/0.05/0.85, Frachtraum 1.60, Cockpit 1.55 mit Spanten
+ * bei z = 1.95/2.70. Jedes Panel sitzt in einer Luecke zwischen den Spanten,
+ * nicht darueber.
+ *
+ * **Zwei Regeln, die sich erst beim Durchlaufen gezeigt haben:**
+ *
+ * 1. Kein Panel innerhalb von 1,5 m um den Pilotensitz (GLB z = 3.02). So weit
+ *    reicht der Hinsetzen-Prompt, und bei Gleichstand gewinnt der Sitz
+ *    (`PlayerState.updateWalking`). Eine Klappe im Fussraum liess sich deshalb
+ *    nie ansprechen: zum Hinlangen steht man zwangslaeufig vor dem Sitz.
+ * 2. Keine Klappe an der Decke. Sie faellt beim Gehen aus dem Blick, und ihre
+ *    Beschriftung steht fuer eine der beiden Laufrichtungen kopfueber.
  */
 export const PANEL_PLACEMENTS: readonly PanelPlacement[] = [
   // Sicherungskasten im Gang, auf halber Strecke: das erste, was man sieht,
   // wenn man aufsteht und nach hinten geht.
   { id: 'lighting', position: [0.695, 1.4, 0.45], facing: [-1, 0, 0], size: [0.34, 0.46] },
-  // Lebenserhaltung haengt unter dem Leitungsstrang an der Gangdecke.
-  { id: 'lifeSupport', position: [0, 1.845, -0.85], facing: [0, -1, 0], size: [0.36, 0.3] },
+  // Lebenserhaltung gegenueber an der Backbordwand des Gangs, zwischen
+  // Wandmonitor und Spant. Die Anlage selbst sitzt auf dem Ruecken (siehe
+  // `exposure`), der Zugang liegt hier — im Gang laeuft man zwangslaeufig
+  // daran vorbei, an der Decke nicht.
+  { id: 'lifeSupport', position: [-0.695, 1.45, -0.35], facing: [1, 0, 0], size: [0.38, 0.34] },
   // Triebwerkszugang: grosse Klappe in der Rueckwand des Frachtraums.
   {
     id: 'engine',
@@ -73,9 +95,10 @@ export const PANEL_PLACEMENTS: readonly PanelPlacement[] = [
   { id: 'thrusters', position: [1.615, 1.45, -3.25], facing: [-1, 0, 0], size: [0.4, 0.44] },
   // Generator ganz achtern an Backbord, hinter dem Spant.
   { id: 'generator', position: [-1.615, 1.45, -4.93], facing: [1, 0, 0], size: [0.4, 0.5] },
-  // Waffenrechner im Fussraum unter der Cockpitkonsole.
-  { id: 'weapons', position: [-0.62, 0.5, 3.735], facing: [0, 0, -1], size: [0.44, 0.34] },
-  // Sensorik neben dem Sitz an der Cockpitwand.
+  // Waffenrechner an der Backbordwand des Cockpits, gegenueber der Sensorik.
+  // Vorher im Fussraum unter der Konsole — dort gewann immer der Sitz.
+  { id: 'weapons', position: [1.575, 1.34, 2.32], facing: [-1, 0, 0], size: [0.36, 0.44] },
+  // Sensorik an Steuerbord, in derselben Spantluecke.
   { id: 'sensors', position: [-1.575, 1.38, 2.32], facing: [1, 0, 0], size: [0.34, 0.42] },
 ] as const;
 
@@ -97,19 +120,42 @@ const STATUS_COLOR: Record<SystemStatus, number> = {
 /** Grundhelligkeit der Leiste je Status (heil leuchtet nur schwach mit). */
 const STATUS_EMISSIVE: Record<SystemStatus, number> = {
   ok: 0.25,
-  impaired: 1.3,
-  failed: 1.9,
+  impaired: 2.2,
+  failed: 3.0,
 };
 
 /** Pulsfrequenz der Leiste in Hz je Status. */
 const STATUS_PULSE: Record<SystemStatus, number> = { ok: 0, impaired: 1.1, failed: 2.6 };
 
+/**
+ * Helligkeit der Beschriftung je Status.
+ *
+ * Der Innenraum haengt voll bernsteinfarbener Schilder und Aufkleber; eine
+ * defekte Klappe mit dunklem Schild geht darin unter. Erst wenn der Name
+ * mitleuchtet, sieht man aus dem Gang nicht nur *dass* etwas blinkt, sondern
+ * auch *was* kaputt ist.
+ */
+const LABEL_EMISSIVE: Record<SystemStatus, number> = { ok: 0.14, impaired: 0.75, failed: 1.1 };
+
+/**
+ * Reichweite und Staerke des Lichts, das eine defekte Klappe in den Raum wirft.
+ *
+ * Das ist der eigentliche Blickfang: die Leiste selbst ist aus vier Metern nur
+ * ein Strich, der bernsteinfarben angeleuchtete Wandausschnitt drumherum aber
+ * nicht zu uebersehen — und vor allem nicht mit einem aufgeklebten Schild zu
+ * verwechseln, weil der mitpulst.
+ */
+const GLOW_DISTANCE = 3.4;
+const GLOW_INTENSITY: Record<SystemStatus, number> = { ok: 0, impaired: 1.15, failed: 2.0 };
+
 /** Funken pro Sekunde bei Ausfall bzw. Beeintraechtigung. */
-const SPARK_RATE: Record<SystemStatus, number> = { ok: 0, impaired: 3, failed: 22 };
+const SPARK_RATE: Record<SystemStatus, number> = { ok: 0, impaired: 5, failed: 26 };
 
 const _quat = new Quaternion();
-const _forward = new Vector3(0, 0, 1);
 const _vec = new Vector3();
+const _right = new Vector3();
+const _up = new Vector3();
+const _basis = new Matrix4();
 const _color = new Color();
 
 /**
@@ -155,7 +201,15 @@ class Sparks {
   private readonly count: number;
   private pending = 0;
 
-  constructor(count: number, private readonly area: readonly [number, number]) {
+  /**
+   * `area` ist der Spalt, aus dem die Funken treten (Breite/Hoehe), `offsetY`
+   * seine Lage ueber der Klappenmitte.
+   */
+  constructor(
+    count: number,
+    private readonly area: readonly [number, number],
+    private readonly offsetY: number = 0,
+  ) {
     this.count = count;
     this.positions = new Float32Array(count * 3);
     this.velocity = new Float32Array(count * 3);
@@ -166,14 +220,16 @@ class Sparks {
 
     const geometry = new BufferGeometry();
     geometry.setAttribute('position', new BufferAttribute(this.positions, 3));
-    // Klein und warm: additiv gemischt und mit Bloom darueber wird aus jedem
-    // Punkt sonst ein weisses Quadrat statt eines Funkens.
+    // Warm statt weiss: additiv gemischt und mit Bloom darueber wird aus einem
+    // hellen Punkt sonst ein weisses Quadrat statt eines Funkens. Die Groesse
+    // ist trotzdem ein knapper Zentimeter — bei 9 mm blieben aus zwei Metern
+    // ein paar Pixel uebrig, die man fuer Staub haelt.
     const material = new PointsMaterial({
-      color: 0xff7b23,
-      size: 0.009,
+      color: 0xff6a14,
+      size: 0.02,
       sizeAttenuation: true,
       transparent: true,
-      opacity: 0.9,
+      opacity: 0.85,
       blending: AdditiveBlending,
       depthWrite: false,
     });
@@ -206,21 +262,26 @@ class Sparks {
 
       if (this.pending < 1) continue;
       this.pending -= 1;
-      this.spawn(i, random);
+      this.spawn(i, random, gravity);
     }
 
     this.points.geometry.getAttribute('position').needsUpdate = true;
   }
 
-  private spawn(index: number, random: () => number): void {
+  private spawn(index: number, random: () => number, gravity: Vector3): void {
     const [w, h] = this.area;
     this.positions[index * 3] = (random() - 0.5) * w;
-    this.positions[index * 3 + 1] = (random() - 0.5) * h;
+    this.positions[index * 3 + 1] = this.offsetY + (random() - 0.5) * h;
     this.positions[index * 3 + 2] = HOUSING_DEPTH / 2 + 0.01;
-    this.velocity[index * 3] = (random() - 0.5) * 0.8;
-    this.velocity[index * 3 + 1] = (random() - 0.5) * 0.8;
-    this.velocity[index * 3 + 2] = 0.3 + random() * 1.1;
-    this.life[index] = 0.22 + random() * 0.45;
+
+    // Vorzugsrichtung: aus der Klappe heraus (+Z) und nach unten. "Unten"
+    // kommt aus `gravity`, nicht aus -Y — sonst spritzt eine liegende Klappe
+    // ihre Funken zur Seite.
+    const fall = 0.3 + random() * 0.8;
+    this.velocity[index * 3] = (random() - 0.5) * 1.1 + gravity.x * fall;
+    this.velocity[index * 3 + 1] = (random() - 0.5) * 0.5 + gravity.y * fall;
+    this.velocity[index * 3 + 2] = 0.35 + random() * 1.3 + gravity.z * fall;
+    this.life[index] = 0.2 + random() * 0.5;
   }
 }
 
@@ -229,6 +290,10 @@ interface Panel {
   id: SystemId;
   group: Group;
   status: MeshStandardMaterial;
+  /** Material der Klappe selbst — glimmt bei Schaden in der Statusfarbe an. */
+  housing: MeshStandardMaterial;
+  /** Material des Namensschildes; `null`, wenn kein Canvas verfuegbar war. */
+  label: MeshStandardMaterial | null;
   light: PointLight;
   sparks: Sparks;
   /** "Unten" im Panelsystem — fuer den Funkenflug. */
@@ -330,7 +395,17 @@ export class RepairPanels {
       _color.setHex(repairing ? 0x9fd4ff : STATUS_COLOR[status]);
       panel.status.emissive.copy(_color);
       panel.status.color.copy(_color).multiplyScalar(0.25);
-      panel.status.emissiveIntensity = (repairing ? 1.8 : STATUS_EMISSIVE[status]) * pulse;
+      panel.status.emissiveIntensity = (repairing ? 2.6 : STATUS_EMISSIVE[status]) * pulse;
+
+      // Der Name leuchtet mit, sobald etwas kaputt ist (siehe LABEL_EMISSIVE).
+      if (panel.label) {
+        panel.label.emissiveIntensity = repairing ? 0.9 : LABEL_EMISSIVE[status];
+      }
+
+      // Die Klappe selbst glimmt in ihrer Statusfarbe an. Ohne das bleibt sie
+      // ein schwarzes Rechteck, und schwarze Rechtecke haengen hier viele.
+      panel.housing.emissive.copy(_color);
+      panel.housing.emissiveIntensity = repairing ? 0.14 : status === 'ok' ? 0 : 0.1 * pulse;
 
       // Nur beschaedigte Panels leuchten in den Raum. Unsichtbare Lichter
       // landen gar nicht erst im Renderdurchgang und kosten dann auch nichts.
@@ -338,7 +413,7 @@ export class RepairPanels {
       panel.light.visible = glowing;
       if (glowing) {
         panel.light.color.copy(_color);
-        panel.light.intensity = (repairing ? 0.5 : status === 'failed' ? 0.75 : 0.4) * pulse;
+        panel.light.intensity = (repairing ? 1.1 : GLOW_INTENSITY[status]) * pulse;
       }
 
       panel.sparks.update(
@@ -360,14 +435,19 @@ export class RepairPanels {
     group.position.set(placement.position[0], placement.position[1], placement.position[2]);
 
     // Frontplatte zeigt lokal nach +Z und wird auf die Wandnormale gedreht.
-    _vec.set(placement.facing[0], placement.facing[1], placement.facing[2]).normalize();
-    _quat.setFromUnitVectors(_forward, _vec);
-    group.quaternion.copy(_quat);
+    // Bewusst ueber eine volle Basis und nicht ueber die kuerzeste Drehung von
+    // +Z auf die Normale: die legt die Rollage nicht fest, und bei einer
+    // senkrechten Normalen (Decke) stand die Beschriftung dadurch kopfueber.
+    group.quaternion.copy(orientation(placement));
 
-    const housing = new Mesh(
-      new BoxGeometry(width, height, HOUSING_DEPTH),
-      new MeshStandardMaterial({ color: 0x2c2f33, metalness: 0.85, roughness: 0.5 }),
-    );
+    const housingMaterial = new MeshStandardMaterial({
+      color: 0x2c2f33,
+      metalness: 0.85,
+      roughness: 0.5,
+      emissive: new Color(STATUS_COLOR.ok),
+      emissiveIntensity: 0,
+    });
+    const housing = new Mesh(new BoxGeometry(width, height, HOUSING_DEPTH), housingMaterial);
     housing.castShadow = true;
     housing.receiveShadow = true;
     group.add(housing);
@@ -392,36 +472,40 @@ export class RepairPanels {
       metalness: 0,
       side: DoubleSide,
     });
-    const bar = new Mesh(new PlaneGeometry(width * 0.62, Math.min(height * 0.16, 0.05)), status);
-    bar.position.set(0, height * 0.28, HOUSING_DEPTH / 2 + 0.002);
+    // Statusleiste: breit und hoch genug, um aus vier Metern noch eine Flaeche
+    // zu sein und kein Strich. Sie ist das, was im Gang zuerst auffaellt.
+    const bar = new Mesh(new PlaneGeometry(width * 0.76, Math.min(height * 0.24, 0.085)), status);
+    bar.position.set(0, height * 0.26, HOUSING_DEPTH / 2 + 0.002);
     group.add(bar);
 
     // Beschriftung darunter.
     const labelTexture = createLabelTexture(def.name);
+    let labelMaterial: MeshStandardMaterial | null = null;
     if (labelTexture) {
-      const label = new Mesh(
-        new PlaneGeometry(width * 0.78, Math.min(height * 0.24, 0.075)),
-        new MeshStandardMaterial({
-          map: labelTexture,
-          emissiveMap: labelTexture,
-          emissive: new Color(0xffffff),
-          // Gerade genug Eigenleuchten, um im Halbdunkel lesbar zu bleiben.
-          emissiveIntensity: 0.16,
-          roughness: 0.7,
-          metalness: 0,
-        }),
-      );
-      label.position.set(0, -height * 0.14, HOUSING_DEPTH / 2 + 0.002);
+      labelMaterial = new MeshStandardMaterial({
+        map: labelTexture,
+        emissiveMap: labelTexture,
+        emissive: new Color(0xffffff),
+        // Grundwert; ab hier faehrt `update()` ihn mit dem Status hoch.
+        emissiveIntensity: LABEL_EMISSIVE.ok,
+        roughness: 0.7,
+        metalness: 0,
+      });
+      const label = new Mesh(new PlaneGeometry(width * 0.84, Math.min(height * 0.3, 0.095)), labelMaterial);
+      label.position.set(0, -height * 0.16, HOUSING_DEPTH / 2 + 0.002);
       group.add(label);
     }
 
-    const light = new PointLight(STATUS_COLOR.failed, 0, 2.2, 1.25);
+    const light = new PointLight(STATUS_COLOR.failed, 0, GLOW_DISTANCE, 1.25);
     light.name = `RepairPanel_${placement.id}_Glow`;
     light.position.set(0, 0, 0.28);
     light.visible = false;
     group.add(light);
 
-    const sparks = new Sparks(20, [width * 0.8, height * 0.8]);
+    // Funken kommen aus dem Spalt unter der Statusleiste, nicht aus der ganzen
+    // Klappe: ein Kurzschluss hat eine Stelle, ueber die Flaeche verteilt sieht
+    // es aus wie Staub im Gegenlicht.
+    const sparks = new Sparks(28, [width * 0.5, height * 0.06], height * 0.16);
     group.add(sparks.points);
 
     // "Unten" der Welt in Panelkoordinaten: die Deckenklappe im Gang steht
@@ -432,6 +516,8 @@ export class RepairPanels {
       id: placement.id,
       group,
       status,
+      housing: housingMaterial,
+      label: labelMaterial,
       light,
       sparks,
       gravity,
@@ -492,6 +578,28 @@ export class RepairPanels {
       },
     });
   }
+}
+
+/**
+ * Lage einer Klappe: Frontplatte auf `facing`, Oberkante des Schildes auf
+ * `up` (Standard: Weltoben). Steht `facing` senkrecht und fehlt `up`, waere
+ * "oben" beliebig — dann wird nach achtern ausgerichtet, damit die Schrift
+ * wenigstens definiert steht statt zufaellig.
+ */
+function orientation(placement: PanelPlacement): Quaternion {
+  _vec.set(placement.facing[0], placement.facing[1], placement.facing[2]).normalize();
+
+  const hint = placement.up;
+  if (hint) _up.set(hint[0], hint[1], hint[2]);
+  else if (Math.abs(_vec.y) > 0.95) _up.set(0, 0, -1);
+  else _up.set(0, 1, 0);
+
+  // Rechtshaendige Basis mit -Z-Blickrichtung waere Kameralogik; hier zeigt
+  // die Platte nach +Z, also ist `facing` direkt die dritte Spalte.
+  _right.crossVectors(_up, _vec).normalize();
+  _up.crossVectors(_vec, _right).normalize();
+  _basis.makeBasis(_right, _up, _vec);
+  return _quat.setFromRotationMatrix(_basis);
 }
 
 /** Abstand Brust -> Punkt, wie ihn das Interactables-Register misst. */

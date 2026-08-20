@@ -1,4 +1,4 @@
-import { Mesh, MeshStandardMaterial, PointLight } from 'three';
+import { Mesh, MeshStandardMaterial, PointLight, Vector3 } from 'three';
 import type { Material, Object3D } from 'three';
 
 /**
@@ -19,6 +19,18 @@ const DIFFUSER_PATTERN = /^SM_Lamp\d+_Diffuser$/;
 const LIGHT_PREFIX = 'Light_';
 /** Material der roten Notbeleuchtung (Bodenstreifen, Warnlampen). */
 const EMERGENCY_MATERIAL = 'Lamp_Red';
+/**
+ * Gemeinsames Material der warmen Kleinlampen (Konsolenknoepfe, Kojenlicht).
+ * Die Deckenlampen bekommen eine eigene Kopie, dieses hier bleibt fuer den
+ * Rest — ohne es mitzudimmen glimmt bei totem Bordnetz die Konsole weiter.
+ */
+const WARM_MATERIAL = 'Lamp_Warm';
+/**
+ * Lichtkegel unter den Deckenlampen (`ship/LightShafts.ts`). Sie haengen an
+ * keiner Lampe und blieben deshalb in voller Staerke im dunklen Schiff stehen:
+ * ein strahlender Kegel unter einer toten Lampe.
+ */
+const SHAFT_NAME = 'LightShaft';
 /** Groesster Abstand, in dem eine Leuchtflaeche zu einer Lampe gehoert. */
 const PAIR_RADIUS = 1.4;
 /** Faktor auf die rote Notbeleuchtung, wenn das Deckenlicht weg ist. */
@@ -39,6 +51,22 @@ interface Dimmable {
   base: number;
 }
 
+/** Uniforms, die ein Lichtkegel zum Dimmen anbietet. */
+interface ShaftMaterial {
+  uniforms: { uStrength: { value: number } };
+}
+
+interface Shaft {
+  uniform: { value: number };
+  base: number;
+  position: Vector3;
+  /** Lampe, an der der Kegel haengt; `null` = nur Grundhelligkeit. */
+  lamp: Lamp | null;
+}
+
+/** Groesster Abstand, in dem ein Lichtkegel zu einer Lampe gehoert. */
+const SHAFT_RADIUS = 2.0;
+
 interface Lamp {
   material: MeshStandardMaterial;
   baseEmissive: number;
@@ -48,6 +76,10 @@ interface Lamp {
   seed: number;
   /** Restzeit eines Aussetzers in Sekunden. */
   outage: number;
+  /** Helligkeit im letzten Bild, 0..1 — der Lichtkegel haengt sich daran. */
+  value: number;
+  /** Weltposition der Leuchtflaeche, fuer die Zuordnung der Lichtkegel. */
+  position: Vector3;
 }
 
 export class DamageLights {
@@ -55,6 +87,10 @@ export class DamageLights {
   /** Lampen ohne Leuchtflaeche (Akzentlicht an Werkbank, Koje, Konsole). */
   private readonly accents: Array<{ light: PointLight; base: number }> = [];
   private emergency: { material: MeshStandardMaterial; base: number } | null = null;
+  /** Gemeinsames Warmlicht-Material der Kleinlampen (siehe {@link WARM_MATERIAL}). */
+  private warm: Dimmable | null = null;
+  /** Lichtkegel unter den Deckenlampen (siehe {@link SHAFT_NAME}). */
+  private readonly shafts: Shaft[] = [];
   /** Alle Materialien mit Umgebungsreflexion (siehe {@link ENV_FLOOR}). */
   private readonly reflective: Dimmable[] = [];
   private time = 0;
@@ -66,7 +102,9 @@ export class DamageLights {
     this.lamps.length = 0;
     this.accents.length = 0;
     this.reflective.length = 0;
+    this.shafts.length = 0;
     this.emergency = null;
+    this.warm = null;
 
     const lights: PointLight[] = [];
     interior.traverse((object) => {
@@ -80,11 +118,29 @@ export class DamageLights {
     interior.traverse((object) => {
       if (!(object instanceof Mesh)) return;
 
+      if (object.name === SHAFT_NAME) {
+        const uniform = shaftStrength(object);
+        // Der Kegel wird nach dem Durchlauf einer Lampe zugeordnet; bis dahin
+        // haengt er nur an der Grundhelligkeit.
+        if (uniform) {
+          this.shafts.push({
+            uniform,
+            base: uniform.value,
+            position: object.getWorldPosition(new Vector3()),
+            lamp: null,
+          });
+        }
+        return;
+      }
+
       const material = firstStandardMaterial(object);
       if (material && !seen.has(material)) {
         seen.add(material);
         if (material.name === EMERGENCY_MATERIAL && !this.emergency) {
           this.emergency = { material, base: material.emissiveIntensity };
+        }
+        if (material.name === WARM_MATERIAL && !this.warm) {
+          this.warm = { material, base: material.emissiveIntensity };
         }
         if (material.envMapIntensity > 0) {
           this.reflective.push({ material, base: material.envMapIntensity });
@@ -107,12 +163,28 @@ export class DamageLights {
         baseIntensity: light ? light.intensity : 0,
         seed: this.random() * Math.PI * 2,
         outage: 0,
+        value: 1,
+        position: object.getWorldPosition(new Vector3()),
       });
     });
 
     for (const light of lights) {
       if (taken.has(light)) continue;
       this.accents.push({ light, base: light.intensity });
+    }
+
+    // Jeder Lichtkegel bekommt die Lampe, unter der er haengt: so zuckt der
+    // Kegel mit seiner Lampe mit, statt gleichmaessig ueber allen zu liegen.
+    for (const shaft of this.shafts) {
+      let best: Lamp | null = null;
+      let bestDistance = SHAFT_RADIUS;
+      for (const lamp of this.lamps) {
+        const distance = shaft.position.distanceTo(lamp.position);
+        if (distance >= bestDistance) continue;
+        best = lamp;
+        bestDistance = distance;
+      }
+      shaft.lamp = best;
     }
   }
 
@@ -136,14 +208,28 @@ export class DamageLights {
         const wobble =
           0.5 + 0.5 * Math.sin(this.time * 11.3 + lamp.seed) * Math.sin(this.time * 3.7 + lamp.seed);
         value = level * (1 - flicker * 0.55 * wobble);
-        if (this.random() < flicker * dt * 2.5) lamp.outage = 0.04 + this.random() * 0.22;
+        // Die Wahrscheinlichkeit haengt am Zeitschritt und wird bei einem
+        // langen Bild sonst groesser als 1 — dann setzt jede Lampe in jedem
+        // Bild aus, und aus dem Flackern wird ein Dauerausfall. Deshalb
+        // gedeckelt: bei Rucklern flackert es traeger, nicht kaputt.
+        const chance = Math.min(flicker * Math.min(dt, 0.1) * 2.5, 0.3);
+        if (this.random() < chance) lamp.outage = 0.04 + this.random() * 0.22;
       }
 
+      lamp.value = value;
       lamp.material.emissiveIntensity = lamp.baseEmissive * value;
       if (lamp.light) lamp.light.intensity = lamp.baseIntensity * value;
     }
 
     for (const accent of this.accents) accent.light.intensity = accent.base * level;
+
+    // Der Lichtkegel gehoert zu seiner Lampe: geht sie aus, verschwindet er.
+    for (const shaft of this.shafts) {
+      shaft.uniform.value = shaft.base * (shaft.lamp ? shaft.lamp.value : level);
+    }
+
+    // Kleinlampen an Konsole und Koje haengen am selben Bordnetz.
+    if (this.warm) this.warm.material.emissiveIntensity = this.warm.base * level;
 
     const ambient = ENV_FLOOR + (1 - ENV_FLOOR) * level;
     for (const entry of this.reflective) entry.material.envMapIntensity = entry.base * ambient;
@@ -153,6 +239,18 @@ export class DamageLights {
         this.emergency.base * (emergency ? EMERGENCY_BOOST : 1);
     }
   }
+}
+
+/**
+ * `uStrength`-Uniform eines Lichtkegels, oder `null`, wenn das Mesh keinen
+ * passenden Shader traegt. Bewusst defensiv: die Kegel gehoeren `LightShafts`,
+ * und deren Aufbau soll sich aendern duerfen, ohne dass hier etwas kracht.
+ */
+function shaftStrength(mesh: Mesh): { value: number } | null {
+  const material = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+  const uniforms = (material as Partial<ShaftMaterial> | undefined)?.uniforms;
+  const strength = uniforms?.uStrength;
+  return strength && typeof strength.value === 'number' ? strength : null;
 }
 
 function firstStandardMaterial(mesh: Mesh): MeshStandardMaterial | null {
