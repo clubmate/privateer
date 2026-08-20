@@ -146,6 +146,12 @@ export class RockShape {
   private readonly craterDepth: Float64Array;
   private readonly craterRim: Float64Array;
   private readonly craterCount: number;
+  /** Ab diesem Index stehen die kleinen Krater der Grossbrocken. */
+  private readonly fineFrom: number;
+
+  /** Mittlere Oktave — nur bei Grossbrocken, sonst 0. */
+  private readonly midAmp: number;
+  private readonly midFreq: number;
 
   private readonly bumpAmp: number;
   private readonly bumpFreq: number;
@@ -155,6 +161,7 @@ export class RockShape {
   private readonly veinFreq: number;
   private readonly veinSharp: number;
   private readonly veinStretch: number;
+  private readonly mottleFreq: number;
   private readonly seed: number;
 
   /** Faktor, der den groessten Radius auf 1 zieht. */
@@ -162,7 +169,12 @@ export class RockShape {
   /** Kleinster Radius nach Normierung — Vorfilter fuer Strahltests. */
   private smallest = 1;
 
-  constructor(archetype: ArchetypeId, seed: number) {
+  /**
+   * @param fine Zusaetzliche Mittelstruktur (kleine Krater, eine Oktave mehr).
+   *   Nur fuer Grossbrocken sinnvoll: ein Geroellbrocken mit 320 Dreiecken
+   *   kann sie nicht darstellen und wuerde davon nur unruhig.
+   */
+  constructor(archetype: ArchetypeId, seed: number, fine = false) {
     this.id = archetype;
     this.seed = (seed % 97) * 13.37 + 4.2;
     const rng = makeRng(seed * 7919 + 13);
@@ -194,9 +206,10 @@ export class RockShape {
         craterSize = [0.14, 0.3];
         break;
       case 'slab':
-        // Scheibe: eine Achse deutlich flacher, Raender angefressen.
+        // Scheibe: eine Achse deutlich flacher, Raender angefressen. Nicht
+        // duenner als ein Drittel — sonst wird aus dem Felsbrocken ein Plaetzchen.
         this.ax = 1;
-        this.ay = range(0.24, 0.36);
+        this.ay = range(0.34, 0.46);
         this.az = range(0.72, 0.95);
         this.bumpAmp = 0.19;
         cuts = count(1, 3);
@@ -214,13 +227,15 @@ export class RockShape {
         craterSize = [0.14, 0.36];
         break;
       case 'shard':
-        // Fast nur ebene Flaechen: ein Bruchstueck von etwas Groesserem.
+        // Fast nur ebene Flaechen: ein Bruchstueck von etwas Groesserem. Die
+        // Beulen bleiben klein, sonst wellen sich die Bruchflaechen und die
+        // Kanten verschwinden.
         this.ax = 1;
         this.ay = range(0.72, 0.95);
         this.az = range(0.66, 0.9);
-        this.bumpAmp = 0.09;
-        this.ridgeAmp = 0.06;
-        cuts = count(6, 9);
+        this.bumpAmp = 0.05;
+        this.ridgeAmp = 0.04;
+        cuts = count(7, 10);
         craters = count(1, 3);
         craterSize = [0.12, 0.28];
         break;
@@ -262,8 +277,15 @@ export class RockShape {
       const z = range(-1, 1);
       const l = Math.hypot(x, y, z) || 1;
       this.cutN.set([x / l, y / l, z / l], i * 3);
-      this.cutD[i] = range(0.52, 0.86);
+      this.cutD[i] = archetype === 'shard' ? range(0.46, 0.74) : range(0.52, 0.86);
     }
+
+    // Grossbrocken bekommen eine zweite, kleinere Kraterlage. Sie traegt die
+    // mittlere Entfernung: von 500 m sieht man weder Griess noch Umriss,
+    // sondern genau diese Narben.
+    const fineCraters = fine ? count(9, 16) : 0;
+    this.fineFrom = craters;
+    craters += fineCraters;
 
     this.craterCount = craters;
     this.craterDir = new Float64Array(craters * 3);
@@ -276,17 +298,30 @@ export class RockShape {
       const z = range(-1, 1);
       const l = Math.hypot(x, y, z) || 1;
       this.craterDir.set([x / l, y / l, z / l], i * 3);
-      const angle = range(craterSize[0], craterSize[1]);
+      const angle = i < this.fineFrom ? range(craterSize[0], craterSize[1]) : range(0.06, 0.15);
       this.craterCos[i] = Math.cos(angle);
-      // Flache Schuesseln: ein Krater, der tiefer als ein Viertel seines
-      // Durchmessers ist, sieht aus wie ein Einschussloch.
-      this.craterDepth[i] = angle * range(0.16, 0.34);
-      this.craterRim[i] = angle * range(0.05, 0.16);
+      // Deutliche Schuessel, flacher Wall. Umgekehrt — viele hohe Waelle bei
+      // flachen Schuesseln — ueberlagern sich die Raender zu einem Geflecht,
+      // und der Brocken sieht aus wie eine Hirnkoralle statt wie Fels.
+      this.craterDepth[i] = angle * range(0.24, 0.42);
+      this.craterRim[i] = angle * range(0.03, 0.09);
+    }
+
+    this.midAmp = fine ? range(0.025, 0.045) : 0;
+    this.midFreq = range(6, 9.5);
+    if (fine) {
+      // Grate wirken auf einem Grossbrocken wie Stofffalten: hundert Meter
+      // lange, scharfe Ruecken gibt es an keinem Fels. Auf dem Splitter, wo
+      // sie zentimeterbreit sind, bleiben sie.
+      this.ridgeAmp *= 0.35;
     }
 
     this.veinFreq = range(3.5, 6.5);
-    this.veinSharp = range(5, 9);
+    // Scharf heisst duenn: breite Baender lesen sich als Farbflecken, nicht
+    // als Adern — und dann sieht ein Brocken gescheckt aus statt mineralisch.
+    this.veinSharp = range(9, 15);
     this.veinStretch = range(0.25, 0.6);
+    this.mottleFreq = range(1.6, 2.6);
 
     this.measure();
   }
@@ -316,10 +351,20 @@ export class RockShape {
     const n = fbm3(x * f + s, y * f * this.veinStretch - s, z * f + s * 0.5, 3);
     let band = 1 - Math.min(Math.abs(n - 0.5) * this.veinSharp, 1);
     band *= band;
-    // Zweite Lage: grobe Einschluesse, damit nicht alles gestreift ist.
-    const blob = noise3(x * 2.6 - s, y * 2.6 + s, z * 2.6 + s);
-    const spot = Math.max(0, (blob - 0.66) * 3);
-    return Math.min(band * 0.85 + spot * 0.6, 1);
+    // Zweite Lage: vereinzelte Einschluesse, damit nicht alles gestreift ist.
+    const blob = noise3(x * 3.4 - s, y * 3.4 + s, z * 3.4 + s);
+    const spot = Math.max(0, (blob - 0.74) * 3.2);
+    return Math.min(band * 0.8 + spot * 0.5, 1);
+  }
+
+  /**
+   * Grossflaeckige Helligkeitsflecken 0..1. Ohne sie sieht ein Brocken aus
+   * wie ein einfarbig lackiertes Modell — Fels ist nirgends gleichmaessig.
+   */
+  mottle(x: number, y: number, z: number): number {
+    const f = this.mottleFreq;
+    const s = this.seed;
+    return fbm3(x * f - s * 1.3, y * f + s, z * f - s * 0.4, 3);
   }
 
   /**
@@ -359,6 +404,10 @@ export class RockShape {
     if (this.ridgeAmp > 0) {
       const rf = this.ridgeFreq;
       r *= 1 + (ridgedFbm3(x * rf - s, y * rf + s, z * rf + s * 0.5, 3) - 0.55) * this.ridgeAmp;
+    }
+    if (this.midAmp > 0) {
+      const mf = this.midFreq;
+      r *= 1 + (fbm3(x * mf + s * 0.7, y * mf - s, z * mf + s, 2) - 0.5) * 2 * this.midAmp;
     }
 
     // Bruchflaechen: die Ebene schneidet den Koerper, wo sie naeher liegt als
@@ -428,15 +477,16 @@ export class RockShape {
  * Mesh zu einer Form. `detail` ist die Zahl der Unterteilungen (2 = 320
  * Dreiecke, 3 = 1280, 4 = 5120, 5 = 20480).
  *
- * Neben Position und Normale traegt die Geometrie `aRockDetail`: Adernmaske
- * und Muldentiefe. Beides wird im Shader mit den Instanzfarben verrechnet —
- * so kann dieselbe Geometrie einen Eisbrocken und eine Kupferader zeigen.
+ * Neben Position und Normale traegt die Geometrie `aRockDetail`: Adernmaske,
+ * Muldentiefe und Fleckigkeit. Alle drei werden im Shader mit den
+ * Instanzfarben verrechnet — so zeigt dieselbe Geometrie einmal einen
+ * Eisbrocken und einmal eine Kupferader.
  */
 export function buildRockGeometry(shape: RockShape, detail: number): BufferGeometry {
   const { dirs, index } = icosphere(detail);
   const points = dirs.length / 3;
   const position = new Float32Array(dirs.length);
-  const rockDetail = new Float32Array(points * 2);
+  const rockDetail = new Float32Array(points * 3);
 
   for (let i = 0; i < points; i++) {
     const x = dirs[i * 3]!;
@@ -446,17 +496,21 @@ export function buildRockGeometry(shape: RockShape, detail: number): BufferGeome
     position[i * 3] = x * r;
     position[i * 3 + 1] = y * r;
     position[i * 3 + 2] = z * r;
-    rockDetail[i * 2] = shape.vein(x, y, z);
-    rockDetail[i * 2 + 1] = shape.cavity(x, y, z);
+    rockDetail[i * 3] = shape.vein(x, y, z);
+    rockDetail[i * 3 + 1] = shape.cavity(x, y, z);
+    rockDetail[i * 3 + 2] = shape.mottle(x, y, z);
   }
 
   let geometry = new BufferGeometry();
   geometry.setAttribute('position', new BufferAttribute(position, 3));
-  geometry.setAttribute('aRockDetail', new BufferAttribute(rockDetail, 2));
+  geometry.setAttribute('aRockDetail', new BufferAttribute(rockDetail, 3));
   geometry.setIndex(new BufferAttribute(index, 1));
 
-  if (shape.sharp) {
-    // Ohne Index bekommt jedes Dreieck seine eigene Normale — harte Kanten.
+  // Flach schattiert wird nur das Kleinzeug. Bei einem Grossbrocken mit
+  // 20.000 Dreiecken ist ein Dreieck 14 m breit — jede Facette bekaeme ihre
+  // eigene Helligkeit, und der Planetoid saehe aus wie zerknuelltes Papier.
+  // Seine Kanten kommen dort von den Bruchflaechen, nicht von der Aufloesung.
+  if (shape.sharp && detail <= 3) {
     const flat = geometry.toNonIndexed();
     geometry.dispose();
     geometry = flat;

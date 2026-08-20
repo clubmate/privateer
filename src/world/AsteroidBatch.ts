@@ -26,9 +26,43 @@ import { MINERALS, type MineralId } from './AsteroidTypes';
  * Entfernung aus — weiter weg zahlt niemand dafuer.
  */
 
-/** Ab hier ist die Feinstruktur voll da, dahinter blendet sie aus. */
-const DETAIL_NEAR = 60;
-const DETAIL_FAR = 420;
+/**
+ * Drei Reliefstufen in der Normale, je Wellenlaenge eine, mit eigener
+ * Ausblendung.
+ *
+ * **Warum gestaffelt:** prozedurales Rauschen hat keine Mipmaps. Sobald eine
+ * Zelle unter Pixelgroesse faellt, wird aus Koernung Griess und der Brocken
+ * flimmert wie ein schlechtes Fernsehbild. Also blendet jede Stufe aus, bevor
+ * es soweit ist; uebrig bleibt genau die Struktur, die auf der jeweiligen
+ * Entfernung darstellbar ist. Zusammen sind sie eine Oktavkette — aus der
+ * Naehe liegen alle drei uebereinander, von weitem traegt nur die groebste.
+ *
+ * `scale` ist der Kehrwert der Wellenlaenge in Metern, `near`/`far` der
+ * Ausblendbereich in Metern.
+ */
+const RELIEF = [
+  { scale: 0.09, near: 400, far: 1100, strength: 0.26 }, // gut 10 m: Mittelform
+  { scale: 0.33, near: 110, far: 320, strength: 0.2 }, // 3 m: Buckel und Rinnen
+  { scale: 1.3, near: 30, far: 95, strength: 0.22 }, // 0,8 m: Koernung
+];
+
+/**
+ * Helligkeitsflecken aus derselben Rauschquelle, aber ohne Normale: Staub,
+ * Schutt und ausgebleichte Stellen. Fels ist fleckig — waere alles nur
+ * gebeult, saehe die Oberflaeche aus wie gehaemmertes Blech.
+ */
+const DUST_SCALE = 0.55;
+const DUST_NEAR = 160;
+const DUST_FAR = 480;
+const DUST_STRENGTH = 0.5;
+
+/**
+ * Sternen- und Planetenlicht. Die Fuelllampe der Szene liegt in der
+ * Tiefenschicht und erreicht die Brocken nicht; ohne diesen Rest waere jede
+ * Schattenseite ein schwarzes Loch mit Silhouette. Bewusst winzig — es soll
+ * Form andeuten, nicht den Weltraum aufhellen.
+ */
+const STARLIGHT = 0.035;
 
 /** Wieviel Metall die Adern zeigen (Erz glaenzt, Eis und Kristall nicht). */
 const METAL: Partial<Record<MineralId, number>> = {
@@ -75,7 +109,7 @@ export function createRockMaterial(): MeshStandardMaterial {
       .replace(
         '#include <common>',
         `#include <common>
-        attribute vec2 aRockDetail;   // x: Adern, y: Mulde
+        attribute vec3 aRockDetail;   // x: Adern, y: Mulde, z: Flecken
         attribute vec3 aRock;
         attribute vec3 aVein;
         attribute vec4 aRockMod;      // Aderstaerke, Leuchten, Rauheit, Metall
@@ -91,7 +125,9 @@ export function createRockMaterial(): MeshStandardMaterial {
         float cavity = aRockDetail.y;
         // In den Mulden liegt Schutt: er deckt die Adern zu und schluckt Licht.
         veinMask *= 1.0 - cavity * 0.7;
-        vRockColor = mix(aRock, aVein, veinMask) * (1.0 - cavity * 0.38);
+        // Grossflaeckige Helligkeitsflecken — Fels ist nie einfarbig.
+        float mottle = 0.70 + aRockDetail.z * 0.42;
+        vRockColor = mix(aRock * mottle, aVein, veinMask) * (1.0 - cavity * 0.38);
         vRockGlow = aVein * (veinMask * aRockMod.y);
         vRockSurf = vec2(mix(aRockMod.z, aRockMod.z * 0.6, veinMask), aRockMod.w * veinMask);
         float rockScale = length(modelMatrix[0].xyz);
@@ -127,12 +163,28 @@ export function createRockMaterial(): MeshStandardMaterial {
                 mix(rockHash(i + vec3(0,1,0)), rockHash(i + vec3(1,1,0)), f.x), f.y),
             mix(mix(rockHash(i + vec3(0,0,1)), rockHash(i + vec3(1,0,1)), f.x),
                 mix(rockHash(i + vec3(0,1,1)), rockHash(i + vec3(1,1,1)), f.x), f.y), f.z);
+        }
+
+        /** Anstieg des Rauschens, normiert auf die Schrittweite. */
+        vec3 rockGradient(vec3 p) {
+          const float e = 0.5;
+          float n0 = rockNoise(p);
+          return (1.0 / e) * vec3(
+            rockNoise(p + vec3(e, 0.0, 0.0)) - n0,
+            rockNoise(p + vec3(0.0, e, 0.0)) - n0,
+            rockNoise(p + vec3(0.0, 0.0, e)) - n0);
         }`,
       )
       .replace(
         '#include <color_fragment>',
         `#include <color_fragment>
-        diffuseColor.rgb *= vRockColor;`,
+        diffuseColor.rgb *= vRockColor;
+        float rockDist = length(vViewPosition);
+        float rockDust = 1.0 - smoothstep(${DUST_NEAR.toFixed(1)}, ${DUST_FAR.toFixed(1)}, rockDist);
+        if (rockDust > 0.01) {
+          diffuseColor.rgb *= 1.0 + rockDust * ${DUST_STRENGTH.toFixed(2)}
+            * (rockNoise(vRockPos * ${DUST_SCALE.toFixed(2)}) - 0.5);
+        }`,
       )
       .replace(
         '#include <roughnessmap_fragment>',
@@ -147,29 +199,23 @@ export function createRockMaterial(): MeshStandardMaterial {
       .replace(
         '#include <normal_fragment_maps>',
         `#include <normal_fragment_maps>
-        float rockFade = 1.0 - smoothstep(${DETAIL_NEAR.toFixed(1)}, ${DETAIL_FAR.toFixed(1)}, length(vViewPosition));
-        if (rockFade > 0.01) {
-          // Zwei Lagen Griess. Der Gradient kippt die Normale, die Geometrie
-          // bleibt unberuehrt — das kostet nichts an Dreiecken.
-          vec3 p = vRockPos * 1.7;
-          float e = 0.55;
-          float n0 = rockNoise(p);
-          vec3 g = vec3(rockNoise(p + vec3(e,0,0)) - n0,
-                        rockNoise(p + vec3(0,e,0)) - n0,
-                        rockNoise(p + vec3(0,0,e)) - n0);
-          vec3 q = vRockPos * 0.45;
-          float m0 = rockNoise(q);
-          g += 1.6 * vec3(rockNoise(q + vec3(e,0,0)) - m0,
-                          rockNoise(q + vec3(0,e,0)) - m0,
-                          rockNoise(q + vec3(0,0,e)) - m0);
-          g -= dot(g, normal) * normal;
-          normal = normalize(normal - g * (1.9 * rockFade));
+        // Relief in der Normale — die Geometrie bleibt unberuehrt. Nur der
+        // Anteil tangential zur Flaeche kippt die Normale; der radiale wuerde
+        // sie bloss verkuerzen.
+        vec3 rockGrad = vec3(0.0);
+${RELIEF.map(
+  (r) => `        {
+          float fade = 1.0 - smoothstep(${r.near.toFixed(1)}, ${r.far.toFixed(1)}, rockDist);
+          if (fade > 0.01) rockGrad += (fade * ${r.strength.toFixed(2)}) * rockGradient(vRockPos * ${r.scale.toFixed(3)});
         }`,
+).join('\n')}
+        rockGrad -= dot(rockGrad, normal) * normal;
+        normal = normalize(normal - rockGrad);`,
       )
       .replace(
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
-        totalEmissiveRadiance += vRockGlow;`,
+        totalEmissiveRadiance += vRockGlow + vRockColor * ${STARLIGHT.toFixed(3)};`,
       );
   };
 

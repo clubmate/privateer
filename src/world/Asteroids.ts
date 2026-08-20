@@ -1,6 +1,7 @@
 import { Euler, Group, LOD, MeshStandardMaterial, Object3D, Quaternion, Vector3 } from 'three';
+import type { Camera } from 'three';
 import { makeRng } from './noise';
-import { ARCHETYPES, buildRockGeometry, RockShape } from './AsteroidShapes';
+import { buildRockGeometry, RockShape, type ArchetypeId } from './AsteroidShapes';
 import { createRockMaterial, RockBatch } from './AsteroidBatch';
 import {
   MINERALS,
@@ -100,6 +101,68 @@ const DETAIL_HUGE = [5, 3];
 /** Ab dem Wievielfachen des Radius die grobe Detailstufe genuegt. */
 const LOD_SWITCH = 8;
 
+/**
+ * Nahstufe der Planetoiden: 81.920 Dreiecke, gut drei Meter je Kante bei
+ * einem 400-m-Brocken. Sie wird erst gebaut, wenn jemand hinfliegt — 70 ms
+ * Rechenzeit und anderthalb Megabyte je Brocken lohnen sich nur fuer den
+ * einen, vor dem man gerade steht.
+ */
+const DETAIL_FINE = 6;
+/** Ab diesem Vielfachen des Radius wird die Nahstufe gebaut ... */
+const FINE_BUILD = 3.2;
+/** ... und ab diesem gezeigt. */
+const FINE_SWITCH = 1.7;
+
+const _camPos = new Vector3();
+const _nodePos = new Vector3();
+
+/**
+ * Knoten eines Grossbrockens. Erweitert {@link LOD} um genau eine Sache: kurz
+ * bevor die feinste Stufe gebraucht wird, laesst er sie bauen. Der Renderer
+ * ruft `update` je Bild fuer die Weltkamera auf — das ist die einzige Stelle
+ * im Feld, die ueberhaupt weiss, wo die Kamera steht.
+ */
+class SoloNode extends LOD {
+  private grow: (() => void) | null = null;
+  private trigger = 0;
+
+  /** Nachbau anmelden. Wird genau einmal ausgefuehrt. */
+  whenClose(distance: number, grow: () => void): void {
+    this.trigger = distance;
+    this.grow = grow;
+  }
+
+  override update(camera: Camera): void {
+    if (this.grow) {
+      _camPos.setFromMatrixPosition(camera.matrixWorld);
+      _nodePos.setFromMatrixPosition(this.matrixWorld);
+      if (_camPos.distanceTo(_nodePos) < this.trigger) {
+        const grow = this.grow;
+        this.grow = null;
+        grow();
+      }
+    }
+    super.update(camera);
+  }
+}
+
+/**
+ * Formfamilie nach Groesse. Kleines Geroell sind frische Bruchstuecke —
+ * kantig, splittrig, mit ebenen Bruchflaechen. Ein Planetoid ist seit
+ * Jahrmillionen unterwegs: verwittert, zernarbt, manchmal aus zwei Massen
+ * zusammengewachsen. Ein 400-m-Brocken mit scharfen Schnittflaechen sieht aus
+ * wie ein Betonklotz, ein scharfkantiger Zwei-Meter-Splitter richtig.
+ */
+function archetypeFor(size: AsteroidSize, roll: number): ArchetypeId {
+  const pool: readonly ArchetypeId[] =
+    size === 'huge' || size === 'large'
+      ? ['cratered', 'binary', 'cratered', 'slab']
+      : size === 'medium'
+        ? ['cratered', 'slab', 'splinter', 'binary', 'shard']
+        : ['shard', 'splinter', 'slab', 'shard', 'splinter', 'cratered'];
+  return pool[Math.min(Math.floor(roll * pool.length), pool.length - 1)]!;
+}
+
 /** Mineral nach Haeufigkeit ziehen. */
 function pickMineral(roll: number): MineralId {
   let total = 0;
@@ -173,7 +236,11 @@ export class Asteroids extends Group implements AsteroidField {
   /** Platz innerhalb des Stapels. */
   private readonly slots: number[] = [];
   /** Eigener Knoten der Grossbrocken (traegt Lage und Detailstufen). */
-  private readonly nodes: (LOD | null)[] = [];
+  private readonly nodes: (SoloNode | null)[] = [];
+  /** Streuung der Grundhelligkeit je Platz. */
+  private readonly shades: number[] = [];
+  /** Renderschicht, damit nachgebaute Stufen sie erben. */
+  private layer = 0;
 
   /** Alle Instanzstapel, deren Matrizen je Bild hochgeladen werden. */
   private readonly moving: RockBatch[] = [];
@@ -334,11 +401,15 @@ export class Asteroids extends Group implements AsteroidField {
     const small: RockShape[] = [];
     const medium: RockShape[] = [];
     const seed = this.options.seed;
+    // Varianten gleichmaessig ueber die Familien der Klasse verteilen, nicht
+    // zufaellig: bei acht Formen faellt jede Wiederholung auf.
     for (let v = 0; v < SMALL_VARIANTS; v++) {
-      small.push(new RockShape(ARCHETYPES[v % ARCHETYPES.length]!, seed * 31 + v * 17 + 3));
+      small.push(new RockShape(archetypeFor('small', v / SMALL_VARIANTS), seed * 31 + v * 17 + 3));
     }
     for (let v = 0; v < MEDIUM_VARIANTS; v++) {
-      medium.push(new RockShape(ARCHETYPES[(v + 2) % ARCHETYPES.length]!, seed * 47 + v * 23 + 101));
+      medium.push(
+        new RockShape(archetypeFor('medium', v / MEDIUM_VARIANTS), seed * 47 + v * 23 + 101),
+      );
     }
 
     // Erst zuordnen, dann zaehlen: ein Stapel braucht seine Groesse vorab.
@@ -394,12 +465,13 @@ export class Asteroids extends Group implements AsteroidField {
   private buildSolo(index: number): void {
     const huge = this.sizes[index] === 'huge';
     const shape = new RockShape(
-      ARCHETYPES[Math.min(Math.floor(this.rng() * ARCHETYPES.length), ARCHETYPES.length - 1)]!,
+      archetypeFor(this.sizes[index]!, this.rng()),
       this.options.seed * 131 + index * 7 + 61,
+      true, // Mittelstruktur: Grossbrocken werden aus jeder Entfernung gesehen
     );
     this.shapes[index] = shape;
 
-    const node = new LOD();
+    const node = new SoloNode();
     node.name = 'Asteroid';
     const levels = huge ? DETAIL_HUGE : DETAIL_LARGE;
     const parts: RockBatch[] = [];
@@ -416,6 +488,41 @@ export class Asteroids extends Group implements AsteroidField {
     this.slots[index] = 0;
     this.nodes[index] = node;
     this.add(node);
+
+    // Nur Planetoiden bekommen die Nahstufe: auf ihnen wird gelandet, und nur
+    // sie fuellen aus der Naehe das ganze Bild.
+    if (huge) {
+      const radius = this.radii[index]!;
+      node.whenClose(radius * FINE_BUILD, () => this.growFine(index));
+    }
+  }
+
+  /**
+   * Feinste Stufe eines Planetoiden nachbauen und vorn einhaengen. Laeuft im
+   * Bild, in dem der Spieler nah genug herankommt — einmalig, danach steht
+   * sie.
+   */
+  private growFine(index: number): void {
+    const node = this.nodes[index];
+    if (!node) return;
+    const batch = new RockBatch(
+      buildRockGeometry(this.shapes[index]!, DETAIL_FINE),
+      this.material,
+      1,
+    );
+    batch.setTransform(0, _point.set(0, 0, 0), _quat.identity(), 1);
+    batch.flush();
+    batch.setMineral(0, this.minerals[index]!, this.shades[index]!);
+    // Nachtraeglich erzeugte Kinder stehen nicht mehr im einmaligen traverse
+    // von main.ts — die Schicht muss das Feld selbst setzen, sonst zeichnet
+    // die Stufe in der falschen Tiefenschicht oder gar nicht.
+    batch.mesh.layers.set(this.layer);
+    this.parts[index]!.push(batch);
+
+    // Die bisher feinste Stufe rueckt nach hinten, die neue kommt davor.
+    const first = node.levels[0];
+    if (first) first.distance = this.radii[index]! * FINE_SWITCH;
+    node.addLevel(batch.mesh, 0);
   }
 
   /** Alle Plaetze in ihre Stapel schreiben (Lage und Aussehen). */
@@ -429,7 +536,8 @@ export class Asteroids extends Group implements AsteroidField {
 
   private writeAppearance(index: number): void {
     // Etwas Streuung in der Grundhelligkeit, sonst wirkt das Feld gegossen.
-    const shade = 0.72 + this.rng() * 0.55;
+    const shade = 0.55 + this.rng() * 0.45;
+    this.shades[index] = shade;
     for (const batch of this.parts[index]!) {
       batch.setMineral(this.slots[index]!, this.minerals[index]!, shade);
     }
@@ -465,6 +573,7 @@ export class Asteroids extends Group implements AsteroidField {
    * Grossbrocken sind Kinder, die es dabei mitnehmen muss.
    */
   setLayer(layer: number): void {
+    this.layer = layer;
     this.traverse((child: Object3D) => child.layers.set(layer));
   }
 
@@ -547,6 +656,16 @@ export class Asteroids extends Group implements AsteroidField {
 
   getCenter(index: number, out: Vector3): Vector3 {
     return out.copy(this.positions[index]!).add(this.position);
+  }
+
+  /**
+   * Lage des Brockens in Weltkoordinaten. Das Feld selbst wird nur
+   * verschoben, nie gedreht — die Eigendrehung des Brockens ist damit auch
+   * seine Weltlage. Wer aufsetzt, muss sie kennen, sonst dreht der Fels unter
+   * dem Schiff weg.
+   */
+  getOrientation(index: number, out: Quaternion): Quaternion {
+    return out.copy(this.rotations[index]!);
   }
 
   getMineral(index: number): MineralId {

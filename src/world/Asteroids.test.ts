@@ -331,9 +331,9 @@ describe('Asteroiden — Formen', () => {
       const centroid = a.clone().add(b).add(c).divideScalar(3);
       expect(normal.dot(centroid)).toBeGreaterThan(0);
     }
-    // Adern- und Muldenmaske liegen als Attribut bereit.
+    // Adern, Mulden und Flecken liegen als Attribut bereit.
     const detail = geometry.attributes['aRockDetail']!;
-    expect(detail.itemSize).toBe(2);
+    expect(detail.itemSize).toBe(3);
     expect(detail.count).toBe(position.count);
   });
 
