@@ -132,6 +132,38 @@ export type FlightMode = 'arcade' | 'assist' | 'newton';
 /** Reihenfolge, in der V die Modi durchschaltet. */
 export const FLIGHT_MODE_ORDER: readonly FlightMode[] = ['arcade', 'assist', 'newton'];
 
+/**
+ * Auswirkung von Bordschaden auf das Flugverhalten. Bewusst reine
+ * Multiplikatoren von aussen (siehe `systems/Systems.ts`): das Flugmodell
+ * bleibt eine geschlossene Physik und muss nichts ueber Subsysteme wissen.
+ */
+export interface FlightDamage {
+  /** Faktor auf jeden Schub (Haupt-, Retro-, Nachbrenner). */
+  thrust: number;
+  /** Faktor auf Soll- und Hoechstgeschwindigkeit. */
+  topSpeed: number;
+  /** Faktor auf Drehraten, Drehbeschleunigung und Querversatz (Manoevrierduesen). */
+  torque: number;
+  /**
+   * Dauerhafter Drehratenversatz um die Hochachse in rad/s: eine defekte Duese
+   * blaest weiter. Er geht in die ausgefuehrte Drehung ein, nicht in die
+   * gespeicherte Drehrate — sonst regelt der Flight-Assist ihn weg, und genau
+   * das soll er nicht koennen.
+   */
+  yawBias: number;
+  /** Steht der Nachbrenner zur Verfuegung? (Er zieht aus dem Generator.) */
+  afterburner: boolean;
+}
+
+/** Alles heil: neutrale Faktoren. */
+export const NO_FLIGHT_DAMAGE: FlightDamage = {
+  thrust: 1,
+  topSpeed: 1,
+  torque: 1,
+  yawBias: 0,
+  afterburner: true,
+};
+
 /** Unterhalb dieser Bahngeschwindigkeit gilt Full Stop als erledigt. */
 const FULL_STOP_EPSILON = 0.5;
 /** Ab hier zaehlt eine Achse als aktiv gesteuert. */
@@ -166,9 +198,11 @@ export class FlightModel {
   private arcadeSpeed = 0;
 
   private readonly params: ShipPhysicsParams;
+  private damage: FlightDamage = { ...NO_FLIGHT_DAMAGE };
   private readonly invQuat = new Quaternion();
   private readonly stepQuat = new Quaternion();
   private readonly axis = new Vector3();
+  private readonly rotStep = new Vector3();
   private readonly velLocal = new Vector3();
   private readonly accelLocal = new Vector3();
   private readonly velTarget = new Vector3();
@@ -182,6 +216,18 @@ export class FlightModel {
 
   getParams(): Readonly<ShipPhysicsParams> {
     return this.params;
+  }
+
+  /**
+   * Schadensfaktoren setzen (siehe {@link FlightDamage}). Fehlende Felder
+   * bleiben neutral, damit ein Aufrufer nur das schicken muss, was er kennt.
+   */
+  setDamage(damage: Partial<FlightDamage>): void {
+    this.damage = { ...NO_FLIGHT_DAMAGE, ...damage };
+  }
+
+  getDamage(): Readonly<FlightDamage> {
+    return this.damage;
   }
 
   /** True, solange der Modus die Geschwindigkeit regelt (Arcade oder Assist). */
@@ -284,19 +330,32 @@ export class FlightModel {
     const a = this.params.arcade;
     const i = this.inputs;
     const w = this.angularVelocity;
+    const turn = a.turnRate * this.damage.torque;
+    const roll = a.rollRate * this.damage.torque;
 
     const follow = 1 - Math.exp(-dt / Math.max(a.turnSmoothing, 1e-4));
-    w.x += (clamp(i.pitch, -1, 1) * a.turnRate - w.x) * follow;
-    w.y += (-clamp(i.yaw, -1, 1) * a.turnRate - w.y) * follow;
-    w.z += (-clamp(i.roll, -1, 1) * a.rollRate - w.z) * follow;
+    w.x += (clamp(i.pitch, -1, 1) * turn - w.x) * follow;
+    w.y += (-clamp(i.yaw, -1, 1) * turn - w.y) * follow;
+    w.z += (-clamp(i.roll, -1, 1) * roll - w.z) * follow;
 
-    const speed = w.length();
+    this.applyRotationStep(dt);
+  }
+
+  /**
+   * Die aktuelle Drehrate plus Schadensversatz auf die Lage anwenden. Gemeinsam
+   * fuer beide Modi — der Schritt ist identisch, nur die Drehrate entsteht
+   * unterschiedlich.
+   */
+  private applyRotationStep(dt: number): void {
+    const w = this.angularVelocity;
+    this.rotStep.set(w.x, w.y + this.damage.yawBias, w.z);
+
+    const speed = this.rotStep.length();
     const angle = speed * dt;
-    if (angle > 1e-9) {
-      this.axis.copy(w).normalize();
-      this.stepQuat.setFromAxisAngle(this.axis, angle);
-      this.ship.quaternion.multiply(this.stepQuat).normalize();
-    }
+    if (angle <= 1e-9) return;
+    this.axis.copy(this.rotStep).divideScalar(speed);
+    this.stepQuat.setFromAxisAngle(this.axis, angle);
+    this.ship.quaternion.multiply(this.stepQuat).normalize();
   }
 
   /**
@@ -309,11 +368,21 @@ export class FlightModel {
     const p = this.params;
     const a = p.arcade;
     const i = this.inputs;
+    const d = this.damage;
 
-    if (i.afterburner) this.fullStopActive = false;
+    const burning = i.afterburner && d.afterburner;
+    if (burning) this.fullStopActive = false;
 
-    const target = i.afterburner ? a.boostSpeed : this.fullStopActive ? 0 : this.setSpeed;
-    const rate = i.afterburner ? a.boostAccel : target > this.arcadeSpeed ? a.accel : a.brake;
+    const target = burning
+      ? a.boostSpeed * d.topSpeed
+      : this.fullStopActive
+        ? 0
+        : this.setSpeed * d.topSpeed;
+    const rate = burning
+      ? a.boostAccel * d.thrust
+      : target > this.arcadeSpeed
+        ? a.accel * d.thrust
+        : a.brake * d.thrust;
     const delta = target - this.arcadeSpeed;
     this.arcadeSpeed += clamp(delta, -rate * dt, rate * dt);
 
@@ -322,10 +391,11 @@ export class FlightModel {
       this.fullStopActive = false;
     }
 
-    // Sollgeschwindigkeit im Schiffssystem -> Welt.
+    // Sollgeschwindigkeit im Schiffssystem -> Welt. Der Querversatz kommt aus
+    // denselben Manoevrierduesen wie die Drehung und teilt deren Faktor.
     this.velTarget.set(
-      clamp(i.lateral, -1, 1) * a.strafeSpeed,
-      clamp(i.vertical, -1, 1) * a.strafeSpeed,
+      clamp(i.lateral, -1, 1) * a.strafeSpeed * d.torque,
+      clamp(i.vertical, -1, 1) * a.strafeSpeed * d.torque,
       -this.arcadeSpeed,
     );
     this.velTarget.applyQuaternion(this.ship.quaternion);
@@ -333,8 +403,9 @@ export class FlightModel {
     const follow = 1 - Math.exp(-dt / Math.max(a.grip, 1e-4));
     this.velocity.lerp(this.velTarget, follow);
 
+    const maxSpeed = p.maxSpeed * d.topSpeed;
     const speed = this.velocity.length();
-    if (speed > p.maxSpeed) this.velocity.multiplyScalar(p.maxSpeed / speed);
+    if (speed > maxSpeed) this.velocity.multiplyScalar(maxSpeed / speed);
 
     this.ship.position.addScaledVector(this.velocity, dt);
   }
@@ -346,21 +417,18 @@ export class FlightModel {
     const i = this.inputs;
     const w = this.angularVelocity;
 
+    const torque = this.damage.torque;
+
     // Eingaben auf die lokalen Rotationsachsen abbilden: positive Drehung um
     // +X hebt die Nase, um +Y dreht sie nach links, um +Z rollt sie links.
-    w.x = this.stepAxis(w.x, clamp(i.pitch, -1, 1), p.pitchAccel, dt);
-    w.y = this.stepAxis(w.y, -clamp(i.yaw, -1, 1), p.yawAccel, dt);
-    w.z = this.stepAxis(w.z, -clamp(i.roll, -1, 1), p.rollAccel, dt);
+    w.x = this.stepAxis(w.x, clamp(i.pitch, -1, 1), p.pitchAccel * torque, dt);
+    w.y = this.stepAxis(w.y, -clamp(i.yaw, -1, 1), p.yawAccel * torque, dt);
+    w.z = this.stepAxis(w.z, -clamp(i.roll, -1, 1), p.rollAccel * torque, dt);
 
     const speed = w.length();
     if (speed > p.maxAngularVelocity) w.multiplyScalar(p.maxAngularVelocity / speed);
 
-    const angle = speed * dt;
-    if (angle > 1e-9) {
-      this.axis.copy(w).normalize();
-      this.stepQuat.setFromAxisAngle(this.axis, angle);
-      this.ship.quaternion.multiply(this.stepQuat).normalize();
-    }
+    this.applyRotationStep(dt);
   }
 
   /**
@@ -381,12 +449,13 @@ export class FlightModel {
     const p = this.params;
     const i = this.inputs;
 
-    const mainAccel = p.mainThrust / p.mass;
-    const retroAccel = p.retroThrust / p.mass;
-    const lateralAccel = p.lateralThrust / p.mass;
-    const verticalAccel = p.verticalThrust / p.mass;
+    const d = this.damage;
+    const mainAccel = (p.mainThrust / p.mass) * d.thrust;
+    const retroAccel = (p.retroThrust / p.mass) * d.thrust;
+    const lateralAccel = (p.lateralThrust / p.mass) * d.torque;
+    const verticalAccel = (p.verticalThrust / p.mass) * d.torque;
 
-    const burning = i.afterburner;
+    const burning = i.afterburner && d.afterburner;
     if (burning) this.fullStopActive = false;
 
     // Geschwindigkeit ins Schiffssystem: dort sind die Duesenachsen trivial.
@@ -397,7 +466,7 @@ export class FlightModel {
     const braking = this.fullStopActive;
     const regulating = braking || this.assistEnabled;
     // Zielgeschwindigkeit im Schiffssystem: Nase (-Z) mal Sollgeschwindigkeit.
-    const targetZ = braking ? 0 : -this.setSpeed;
+    const targetZ = braking ? 0 : -this.setSpeed * d.topSpeed;
 
     // --- Querachse (X)
     if (Math.abs(i.lateral) > INPUT_EPSILON) {
@@ -438,8 +507,9 @@ export class FlightModel {
     a.applyQuaternion(this.ship.quaternion);
     this.velocity.addScaledVector(a, dt);
 
+    const maxSpeed = p.maxSpeed * d.topSpeed;
     const speed = this.velocity.length();
-    if (speed > p.maxSpeed) this.velocity.multiplyScalar(p.maxSpeed / speed);
+    if (speed > maxSpeed) this.velocity.multiplyScalar(maxSpeed / speed);
 
     this.ship.position.addScaledVector(this.velocity, dt);
   }
