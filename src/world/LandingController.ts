@@ -261,8 +261,13 @@ export class LandingController {
     } else if (from === 'ascending') {
       this.releaseShip();
     } else if (to === 'in-range' && from === 'cleared') {
-      this.comms.showMessage(`LANDEANFORDERUNG: ${this.machine.message}`, false);
-      this.messageTimer = MESSAGE_DURATION;
+      // Nur melden, wenn nicht ohnehin eine frischere Meldung steht: der
+      // Abbruch per Taste setzt seine eigene, und die soll nicht im selben
+      // Frame von einer zweiten ueberschrieben werden.
+      if (this.messageTimer <= 0) {
+        this.comms.showMessage(`LANDEANFORDERUNG: ${this.machine.message}`, false);
+        this.messageTimer = MESSAGE_DURATION;
+      }
     }
   }
 

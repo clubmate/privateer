@@ -93,7 +93,10 @@ export const DEFAULT_LANDING_PARAMS: LandingParams = {
   descentDurationPerMeter: 1 / 70,
   liftoffDuration: 5,
   liftoffHeight: 260,
-  hullHeight: 3.2,
+  // Der Aussenrumpf reicht 1,49 m unter die Schiffsmitte (nachgemessen am
+  // Modell); der Rest ist Bodenfreiheit, damit die Kufen aufliegen und nicht
+  // die Unterkante im Fels steckt.
+  hullHeight: 1.9,
   landedYieldBonus: 2.5,
 };
 
