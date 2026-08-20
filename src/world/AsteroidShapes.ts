@@ -162,6 +162,8 @@ export class RockShape {
   private readonly veinSharp: number;
   private readonly veinStretch: number;
   private readonly mottleFreq: number;
+  /** Oktaven der Grundstoerung — bei Grossbrocken eine weniger. */
+  private octaves = 3;
   private readonly seed: number;
 
   /** Faktor, der den groessten Radius auf 1 zieht. */
@@ -298,7 +300,7 @@ export class RockShape {
       const z = range(-1, 1);
       const l = Math.hypot(x, y, z) || 1;
       this.craterDir.set([x / l, y / l, z / l], i * 3);
-      const angle = i < this.fineFrom ? range(craterSize[0], craterSize[1]) : range(0.06, 0.15);
+      const angle = i < this.fineFrom ? range(craterSize[0], craterSize[1]) : range(0.09, 0.17);
       this.craterCos[i] = Math.cos(angle);
       // Deutliche Schuessel, flacher Wall. Umgekehrt — viele hohe Waelle bei
       // flachen Schuesseln — ueberlagern sich die Raender zu einem Geflecht,
@@ -310,6 +312,14 @@ export class RockShape {
     this.midAmp = fine ? range(0.025, 0.045) : 0;
     this.midFreq = range(6, 9.5);
     if (fine) {
+      // Der Griess ist als *kleine* Rauheit gedacht. Auf einem Planetoiden
+      // waeren dieselben drei Prozent zwoelf Meter Ausschlag auf zwanzig Meter
+      // Wellenlaenge: das kann kein Mesh mehr abbilden, und Landung wie
+      // Kollision liefen der gezeichneten Oberflaeche hinterher.
+      this.grainAmp *= 0.28;
+      // Und eine Oktave weniger, aus demselben Grund: die dritte liegt bei
+      // einem Planetoiden schon unterhalb der Dreiecksgroesse.
+      this.octaves = 2;
       // Grate wirken auf einem Grossbrocken wie Stofffalten: hundert Meter
       // lange, scharfe Ruecken gibt es an keinem Fels. Auf dem Splitter, wo
       // sie zentimeterbreit sind, bleiben sie.
@@ -400,10 +410,11 @@ export class RockShape {
 
     const s = this.seed;
     const bf = this.bumpFreq;
-    r *= 1 + (fbm3(x * bf + s, y * bf + s * 1.7, z * bf - s, 3) - 0.5) * 2 * this.bumpAmp;
+    const oct = this.octaves;
+    r *= 1 + (fbm3(x * bf + s, y * bf + s * 1.7, z * bf - s, oct) - 0.5) * 2 * this.bumpAmp;
     if (this.ridgeAmp > 0) {
       const rf = this.ridgeFreq;
-      r *= 1 + (ridgedFbm3(x * rf - s, y * rf + s, z * rf + s * 0.5, 3) - 0.55) * this.ridgeAmp;
+      r *= 1 + (ridgedFbm3(x * rf - s, y * rf + s, z * rf + s * 0.5, oct) - 0.55) * this.ridgeAmp;
     }
     if (this.midAmp > 0) {
       const mf = this.midFreq;
@@ -430,8 +441,15 @@ export class RockShape {
       const outer = 1 - (1 - cos) * 1.4;
       if (c <= outer) continue;
       const t = (1 - c) / (1 - cos);
-      if (t < 1) dent -= this.craterDepth[i]! * (1 - t * t);
-      const e = (t - 1) * 4;
+      if (t < 1) {
+        // Schuessel, die am Rand waagerecht auslaeuft. Ein Profil mit Knick
+        // (schlicht 1 - t²) erzeugt dort eine Kante, die feiner ist als jedes
+        // Dreieck des Meshes — und damit weichen gezeichnete und gerechnete
+        // Oberflaeche genau am Kraterrand um Meter voneinander ab.
+        const bowl = 1 - t * t;
+        dent -= this.craterDepth[i]! * bowl * Math.sqrt(bowl);
+      }
+      const e = (t - 1) * 2.6;
       dent += this.craterRim[i]! * Math.exp(-e * e);
     }
     r *= 1 + dent;

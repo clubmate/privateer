@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { Vector3 } from 'three';
+import { PerspectiveCamera, Quaternion, Raycaster, Vector3 } from 'three';
+import type { LOD, Mesh } from 'three';
 import { Asteroids } from './Asteroids';
 import { MINERAL_IDS, SIZE_CLASSES, yieldTons } from './AsteroidTypes';
 import { ARCHETYPES, buildRockGeometry, RockShape } from './AsteroidShapes';
@@ -466,5 +467,108 @@ describe('Asteroidenfeld — Treffer auf echter Geometrie', () => {
     // ... der gemeldete Radius bleibt aber der der Oberflaeche, sonst setzt
     // die Rumpfkollision das Schiff zu weit heraus.
     expect(padded.radius).toBeCloseTo(bare.radius, 0);
+  });
+});
+
+describe('Asteroidenfeld — Oberflaeche fuer die Landung', () => {
+  /** Groesster Brocken und der Mesh, mit dem er gezeichnet wird. */
+  function planetoid(field: Asteroids): { index: number; mesh: Mesh } {
+    let index = 0;
+    for (let i = 1; i < field.count; i++) {
+      if (field.getRadius(i) > field.getRadius(index)) index = i;
+    }
+    field.updateMatrixWorld(true);
+    const center = field.getCenter(index, new Vector3());
+    let node: LOD | null = null;
+    field.traverse((child) => {
+      if (!(child as Partial<LOD>).isLOD) return;
+      if (child.getWorldPosition(new Vector3()).distanceTo(center) > 1e-3) return;
+      node = child as LOD;
+    });
+    if (!node) throw new Error('kein Grossbrocken gefunden');
+
+    // Anflug nachstellen: erst dann baut der Knoten seine Nahstufe, und die
+    // ist es, auf der das Schiff aufsetzt.
+    const camera = new PerspectiveCamera();
+    camera.position.copy(center).add(new Vector3(0, 0, field.getRadius(index) * 2));
+    camera.updateMatrixWorld();
+    (node as LOD).update(camera);
+    field.updateMatrixWorld(true);
+    return { index, mesh: (node as LOD).levels[0]!.object as Mesh };
+  }
+
+  /**
+   * Der Kern des Vertrags zur Landung: der gemeldete Punkt muss auf den
+   * Dreiecken liegen, die der Spieler sieht. Eine Kugelnaeherung liegt bei
+   * dieser Deformation stellenweise ueber fuenfzig Meter daneben — das Schiff
+   * schwebte sichtbar ueber dem Fels.
+   */
+  it('meldet bei Planetoiden Punkte auf der gezeichneten Geometrie', () => {
+    const field = new Asteroids({ count: 200, seed: 31 });
+    const { index, mesh } = planetoid(field);
+    expect(field.getSizeClass(index)).toBe('huge');
+    expect(field.isLandable(index)).toBe(true);
+
+    const center = field.getCenter(index, new Vector3());
+    const sample = { point: new Vector3(), normal: new Vector3() };
+    const caster = new Raycaster();
+    const errors: number[] = [];
+    let worstSphere = 0;
+
+    for (let k = 0; k < 40; k++) {
+      // Richtungen ueber die Kugel streuen (goldener Winkel).
+      const y = 1 - (k / 39) * 2;
+      const r = Math.sqrt(Math.max(0, 1 - y * y));
+      const a = Math.PI * (3 - Math.sqrt(5)) * k;
+      const dir = new Vector3(Math.cos(a) * r, y, Math.sin(a) * r);
+      const from = center.clone().addScaledVector(dir, field.getRadius(index) * 4);
+
+      expect(field.sampleSurface(index, from, sample)).toBe(true);
+      caster.set(from, dir.clone().negate());
+      const hits = caster.intersectObject(mesh, false);
+      if (hits.length === 0) continue;
+      errors.push(hits[0]!.point.distanceTo(sample.point));
+      // Zum Vergleich: was die alte Kugelnaeherung geliefert haette.
+      worstSphere = Math.max(
+        worstSphere,
+        Math.abs(field.getRadius(index) - hits[0]!.point.distanceTo(center)),
+      );
+
+      // Die Normale ist die Neigung der getroffenen Flaeche, nicht die
+      // Blickrichtung — das Schiff richtet sich danach aus.
+      const face = hits[0]!.normal!.clone().transformDirection(mesh.matrixWorld);
+      expect(sample.normal.dot(face)).toBeGreaterThan(0.72);
+    }
+
+    expect(errors.length).toBeGreaterThan(30);
+    errors.sort((a, b) => a - b);
+    const median = errors[Math.floor(errors.length / 2)]!;
+    // Auf einem 400-m-Brocken: im Mittel unter einem Meter. Der schlechteste
+    // Fall liegt hoeher, und das bleibt auch so — eine ebene Bruchflaeche hat
+    // eine echte Kante, und die kann eine Dreieckssehne nicht treffen.
+    expect(median).toBeLessThan(1);
+    expect(errors[errors.length - 1]!).toBeLessThan(3);
+    // Die Kugelnaeherung laege dagegen zig Meter daneben — dafuer steht der
+    // ganze Aufwand hier.
+    expect(worstSphere).toBeGreaterThan(20);
+  });
+
+  it('gibt die Eigendrehung heraus, damit das Schiff mitdreht', () => {
+    const field = new Asteroids({ count: 20, seed: 5 });
+    const before = field.getOrientation(0, new Quaternion());
+    field.update(2);
+    const after = field.getOrientation(0, new Quaternion());
+    expect(before.angleTo(after)).toBeGreaterThan(0);
+
+    // Der abgetastete Punkt dreht mit dem Brocken mit.
+    const center = field.getCenter(0, new Vector3());
+    const from = center.clone().add(new Vector3(0, 0, 900));
+    const sample = { point: new Vector3(), normal: new Vector3() };
+    field.sampleSurface(0, from, sample);
+    const first = sample.point.distanceTo(center);
+    field.update(3);
+    field.getCenter(0, center);
+    field.sampleSurface(0, center.clone().add(new Vector3(0, 0, 900)), sample);
+    expect(sample.point.distanceTo(center)).not.toBeCloseTo(first, 6);
   });
 });
