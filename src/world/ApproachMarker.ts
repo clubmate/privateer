@@ -18,8 +18,12 @@ const MIN_FRAME_SIZE = 460;
 const FRAME_ANGULAR = 0.1;
 /** Obergrenze desselben Anteils (~17 Grad), damit sie im Nahbereich nicht das Bild sprengt. */
 const MAX_FRAME_ANGULAR = 0.3;
-/** Anteil der Entfernung, den die Schrift aufspannt. */
-const LABEL_ANGULAR = 0.052;
+/**
+ * Anteil der Entfernung, den die Schrift aufspannt (~5 Grad). Kleiner darf er
+ * nicht werden: aus 13 km ist die Station ein Fleck, und dann ist die
+ * Beschriftung das Einzige, woran der Pilot sie erkennt.
+ */
+const LABEL_ANGULAR = 0.09;
 /** Seitenverhaeltnis der Schrifttafel. */
 const LABEL_ASPECT = 4;
 
@@ -27,7 +31,7 @@ const FRAME_PX = 256;
 const LABEL_PX = 1024;
 
 const COLORS: Record<Exclude<MarkerMode, 'hidden'>, string> = {
-  far: 'rgba(102, 234, 255, 0.55)',
+  far: 'rgba(102, 234, 255, 0.72)',
   'in-range': 'rgba(102, 234, 255, 0.95)',
   cleared: 'rgba(255, 179, 71, 1)',
 };
@@ -183,17 +187,40 @@ export class ApproachMarker extends Object3D {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = color;
-    ctx.font = "600 78px ui-monospace, 'DejaVu Sans Mono', monospace";
-    ctx.fillText(title, w / 2, h * 0.33);
+    fitText(ctx, title, 600, 78, w, h * 0.33);
 
     ctx.globalAlpha = 0.78;
-    ctx.font = "500 58px ui-monospace, 'DejaVu Sans Mono', monospace";
-    ctx.fillText(hint, w / 2, h * 0.72);
+    fitText(ctx, hint, 500, 58, w, h * 0.72);
     ctx.globalAlpha = 1;
 
     const map = this.label.material.map;
     if (map) map.needsUpdate = true;
   }
+}
+
+/**
+ * Zeile mittig zeichnen und, falls noetig, so weit verkleinern, dass sie in
+ * die Tafel passt. Ohne das schneidet die Leinwand laengere Meldungen an
+ * beiden Enden ab — und zwar genau die, die am meisten zu sagen haben.
+ */
+function fitText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  weight: number,
+  size: number,
+  width: number,
+  y: number,
+): void {
+  const family = "ui-monospace, 'DejaVu Sans Mono', monospace";
+  const limit = width * 0.92;
+  let px = size;
+  ctx.font = `${weight} ${px}px ${family}`;
+  const measured = ctx.measureText(text).width;
+  if (measured > limit) {
+    px = Math.max(Math.floor((px * limit) / measured), 12);
+    ctx.font = `${weight} ${px}px ${family}`;
+  }
+  ctx.fillText(text, width / 2, y);
 }
 
 /** Entfernung lesbar und traege genug, dass die Tafel nicht jeden Frame neu muss. */

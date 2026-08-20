@@ -276,7 +276,7 @@ export class DockingController {
 
     const hint =
       state === 'far'
-        ? `HANDELSPOSTEN · SEKTOR ${this.station.info.sector}`
+        ? `HANDELSPOSTEN ${this.station.info.sector}`
         : state === 'in-range'
           ? 'G — FREIGABE ANFORDERN'
           : 'FREIGABE ERTEILT · ANFLUG FREI';
