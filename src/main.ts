@@ -103,7 +103,13 @@ const planet = new Planet({
   sunDirection: sun.direction,
 });
 
+// --- Asteroidenfeld ---
 const asteroids = new Asteroids();
+// Das Feld setzt seine Renderschicht selbst: die Detailstufen der
+// Grossbrocken haengen als eigene Kinder darin, und das traverse() weiter
+// unten laeuft nur einmal beim Start.
+asteroids.setLayer(WORLD_LAYER);
+// --- Asteroidenfeld Ende ---
 
 const ship = new Ship();
 
