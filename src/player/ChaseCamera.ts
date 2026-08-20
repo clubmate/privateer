@@ -45,6 +45,13 @@ export interface ChaseParams {
   positionTau: number;
   /** Zeitkonstante, mit der die Versatzrichtung der Schiffslage folgt, in s. */
   orientationTau: number;
+  /**
+   * Groesster erlaubter Winkel zwischen nachgezogener und aktueller Schiffslage
+   * in Radiant. Ohne Grenze waechst der Rueckstand im Dauerkurvenflug auf
+   * `Drehrate * orientationTau` an — bei 72 Grad/s sind das rund 40 Grad, und
+   * das Schiff wandert aus dem Bild.
+   */
+  maxLagAngle: number;
   /** Blickpunkt vor der Schiffsnase in m. */
   lookAhead: number;
   /** Blickpunkt ueber dem Schiffsursprung in m. */
@@ -58,13 +65,14 @@ export interface ChaseParams {
  * Nachziehen in der Kurve ist der Effekt, der die Kamera lebendig macht.
  */
 export const DEFAULT_CHASE_PARAMS: ChaseParams = {
-  offset: [0, 3.1, 14.0],
+  offset: [0, 4.3, 18.5],
   speedPull: 4.5,
   speedReference: 420,
   positionTau: 0.26,
-  orientationTau: 0.55,
-  lookAhead: 9,
-  lookLift: 1.1,
+  orientationTau: 0.38,
+  maxLagAngle: 0.30,
+  lookAhead: 7,
+  lookLift: 1.3,
 };
 
 /**
@@ -189,9 +197,21 @@ export class ChaseCameraState {
       return;
     }
     this.lag.slerp(shipRotation, smoothingFactor(this.params.orientationTau, dt));
+    this.clampLag(shipRotation);
     chaseTargetPosition(shipPosition, this.lag, this.params, speed, _target);
     this.position.lerp(_target, smoothingFactor(this.params.positionTau, dt));
     this.aim(shipPosition, shipRotation);
+  }
+
+  /**
+   * Rueckstand der nachgezogenen Lage begrenzen (siehe
+   * {@link ChaseParams.maxLagAngle}).
+   */
+  private clampLag(shipRotation: Quaternion): void {
+    const angle = this.lag.angleTo(shipRotation);
+    if (angle > this.params.maxLagAngle) {
+      this.lag.rotateTowards(shipRotation, angle - this.params.maxLagAngle);
+    }
   }
 
   /**

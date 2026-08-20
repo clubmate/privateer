@@ -43,7 +43,10 @@ describe('plumeLength', () => {
   });
 
   it('ist mit Nachbrenner deutlich laenger', () => {
-    expect(plumeLength(1, true)).toBeGreaterThan(plumeLength(1, false) * 2);
+    // Der Zuschlag ist so gross, dass selbst im Leerlauf gezuendet die Flamme
+    // laenger wird als bei vollem Schub ohne Nachbrenner.
+    expect(plumeLength(1, true) - plumeLength(1, false)).toBeGreaterThan(3);
+    expect(plumeLength(0, true)).toBeGreaterThan(plumeLength(1, false));
   });
 
   it('bleibt auch im Leerlauf sichtbar', () => {

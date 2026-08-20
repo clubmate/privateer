@@ -207,6 +207,25 @@ describe('ChaseCameraState', () => {
     expect(toStart + toTarget).toBeCloseTo(Math.PI / 2, 6);
   });
 
+  it('begrenzt den Rueckstand im Dauerkurvenflug', () => {
+    const state = new ChaseCameraState();
+    state.reset(new Vector3(), identity, 0);
+
+    // Dauerdrehung mit 72 Grad/s (Arcade-Drehrate) ueber mehrere Sekunden.
+    const rate = 1.25;
+    let angle = 0;
+    const ship = new Quaternion();
+    for (let i = 0; i < 600; i++) {
+      angle += rate / 60;
+      ship.setFromEuler(new Euler(0, angle, 0));
+      state.step(1 / 60, new Vector3(), ship, 300);
+    }
+
+    // Ohne Grenze waere der Rueckstand rate * orientationTau ~ 0,48 rad.
+    expect(state.lag.angleTo(ship)).toBeLessThanOrEqual(state.params.maxLagAngle + 1e-6);
+    expect(state.lag.angleTo(ship)).toBeGreaterThan(0.05);
+  });
+
   it('holt die nachgezogene Lage nach genuegend Frames ein', () => {
     const state = new ChaseCameraState();
     state.reset(new Vector3(), identity, 0);

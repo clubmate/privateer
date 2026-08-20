@@ -4,7 +4,6 @@ import {
   BufferAttribute,
   BufferGeometry,
   CanvasTexture,
-  CircleGeometry,
   Color,
   DoubleSide,
   FrontSide,
@@ -90,7 +89,7 @@ const NORMAL_SCALE = 0.8;
 const UV_OFFSET: [number, number] = [0.211, 0.043];
 
 /** Reflexionsstaerke fuer Blech und fuer die Kanzel. */
-const ENV_INTENSITY = 0.85;
+const ENV_INTENSITY = 1.0;
 const ENV_INTENSITY_GLASS = 1.6;
 
 // -------------------------------------------------------------- Triebwerke
@@ -131,8 +130,8 @@ export function thrustLevel(source: ThrustSource): number {
 
 /** Laenge der Flamme in Vielfachen des Duesenradius. */
 export function plumeLength(level: number, afterburner: boolean): number {
-  const base = 0.9 + level * 3.6;
-  return afterburner ? base + 5.4 : base;
+  const base = 0.9 + level * 3.4;
+  return afterburner ? base + 4.0 : base;
 }
 
 /**
@@ -169,10 +168,11 @@ const LAMPS: LampSpec[] = [
 /** Periode des Blinkers in Sekunden. */
 const STROBE_PERIOD = 1.7;
 
+/** Material der Glutscheiben im GLB; die Laufzeit regelt seine Emission. */
+const GLOW_MATERIAL = 'Nozzle_Glow';
+
 interface Thruster {
   plume: Mesh;
-  core: Mesh;
-  radius: number;
   /** Phasenversatz, damit die vier Duesen nicht im Gleichtakt flackern. */
   phase: number;
 }
@@ -191,6 +191,7 @@ interface Lamp {
 export class Exterior extends Object3D {
   private readonly thrusters: Thruster[] = [];
   private readonly lamps: Lamp[] = [];
+  private readonly glow: MeshStandardMaterial[] = [];
   private time = 0;
 
   constructor(root: Object3D) {
@@ -200,6 +201,7 @@ export class Exterior extends Object3D {
     this.add(root);
     this.collectThrusters(root);
     this.collectLamps(root);
+    this.collectGlow(root);
   }
 
   /** Aussenansicht an oder aus. Im Cockpit muss der Rumpf weg sein. */
@@ -227,9 +229,15 @@ export class Exterior extends Object3D {
     const length = plumeLength(level, afterburner);
     const active = level > 0.01 || afterburner;
 
+    // Die Glutscheiben stecken im GLB und wuerden sonst auch bei stehendem
+    // Triebwerk mit voller Staerke leuchten — mit Bloom werden daraus vier
+    // weisse Scheiben, die den halben Rumpf ueberstrahlen.
+    for (const material of this.glow) {
+      material.emissiveIntensity = 0.1 + level * 2.0 + (afterburner ? 1.6 : 0);
+    }
+
     for (const thruster of this.thrusters) {
       thruster.plume.visible = active;
-      thruster.core.visible = active;
       if (!active) continue;
 
       // Flackern: zwei unharmonische Schwingungen, je Duese phasenversetzt.
@@ -239,14 +247,13 @@ export class Exterior extends Object3D {
         0.04 * Math.sin(this.time * 61.7 + thruster.phase * 2.3);
       thruster.plume.scale.set(flicker, flicker, length * flicker);
 
-      const glow = clamp01(0.35 + level * 0.65 + (afterburner ? 0.6 : 0));
-      const core = thruster.core.material as MeshBasicMaterial;
-      core.opacity = glow;
-      thruster.core.scale.setScalar(0.85 + glow * 0.35);
       const plume = thruster.plume.material as MeshBasicMaterial;
-      plume.opacity = clamp01(0.55 + level * 0.45);
-      // Der Nachbrenner brennt heisser, also blauer im Kern.
-      plume.color.setRGB(1, afterburner ? 0.82 : 0.66, afterburner ? 0.72 : 0.38);
+      plume.opacity = clamp01(0.3 + level * 0.38 + (afterburner ? 0.2 : 0));
+      // Die Materialfarbe multipliziert den Verlauf aus der Geometrie und muss
+      // deshalb nahe Weiss bleiben — faerbt man sie orange ein, verschwindet
+      // die Weissglut im Kern und die Flamme sieht aus wie lackiert.
+      if (afterburner) plume.color.setRGB(0.86, 0.92, 1.0);
+      else plume.color.setRGB(1.0, 0.94, 0.86);
     }
 
     for (const lamp of this.lamps) {
@@ -277,23 +284,28 @@ export class Exterior extends Object3D {
       plume.frustumCulled = false;
       plume.layers.set(0);
 
-      const core = new Mesh(
-        new CircleGeometry(radius * 0.92, 20),
-        new MeshBasicMaterial({
-          color: 0xfff0d8,
-          transparent: true,
-          blending: AdditiveBlending,
-          depthWrite: false,
-          toneMapped: false,
-        }),
-      );
-      // Die Scheibe schaut nach achtern (+Z im Schiffssystem).
-      core.position.copy(position).add(new Vector3(0, 0, 0.02));
-      core.layers.set(0);
-
-      this.add(plume, core);
-      this.thrusters.push({ plume, core, radius, phase: index * 1.7 });
+      this.add(plume);
+      this.thrusters.push({ plume, phase: index * 1.7 });
     }
+  }
+
+  /** Materialien der Glutscheiben einsammeln (siehe {@link GLOW_MATERIAL}). */
+  private collectGlow(root: Object3D): void {
+    const done = new Set<Material>();
+    root.traverse((object) => {
+      if (!(object instanceof Mesh)) return;
+      const materials: Material[] = Array.isArray(object.material)
+        ? object.material
+        : [object.material];
+      for (const material of materials) {
+        if (!material || done.has(material)) continue;
+        done.add(material);
+        if (material.name === GLOW_MATERIAL && material instanceof MeshStandardMaterial) {
+          material.toneMapped = false;
+          this.glow.push(material);
+        }
+      }
+    });
   }
 
   private collectLamps(root: Object3D): void {
@@ -345,37 +357,45 @@ export class Exterior extends Object3D {
  * Die Laenge ist auf 1 normiert; die Flamme wird zur Laufzeit in z skaliert.
  */
 function createPlumeGeometry(radius: number, segments = 16): BufferGeometry {
-  const rings: Array<[number, number, [number, number, number, number]]> = [
-    // [z, Radiusfaktor, RGBA]
-    [0.0, 1.0, [1.0, 0.95, 0.8, 0.95]],
-    [0.3, 0.86, [1.0, 0.62, 0.24, 0.8]],
-    [0.65, 0.52, [1.0, 0.36, 0.1, 0.4]],
-    [1.0, 0.06, [0.85, 0.2, 0.05, 0.0]],
+  // [z, Radiusfaktor, RGBA] je Ring. Zwei ineinanderliegende Schalen in einem
+  // Mesh: aussen der rotorange Mantel, innen ein kurzer weissglueender Kern.
+  // Nur ein Mantel wird durch das additive Mischen an der breiten Wurzel
+  // flaechig weiss und sieht dann aus wie lackiertes Blech statt wie Feuer.
+  const shells: Array<Array<[number, number, [number, number, number, number]]>> = [
+    [
+      [0.0, 1.0, [1.0, 0.84, 0.58, 0.8]],
+      [0.22, 0.92, [1.0, 0.52, 0.16, 0.62]],
+      [0.6, 0.55, [1.0, 0.28, 0.06, 0.3]],
+      [1.0, 0.06, [0.8, 0.14, 0.03, 0.0]],
+    ],
+    [
+      [0.0, 0.52, [1.0, 0.98, 0.92, 0.95]],
+      [0.16, 0.44, [1.0, 0.9, 0.7, 0.7]],
+      [0.42, 0.16, [1.0, 0.6, 0.25, 0.0]],
+    ],
   ];
 
   const positions: number[] = [];
   const colors: number[] = [];
   const indices: number[] = [];
 
-  for (const [z, factor, rgba] of rings) {
-    for (let i = 0; i < segments; i++) {
-      const angle = (i / segments) * Math.PI * 2;
-      positions.push(
-        Math.cos(angle) * radius * factor,
-        Math.sin(angle) * radius * factor,
-        z,
-      );
-      colors.push(...rgba);
+  for (const rings of shells) {
+    const base = positions.length / 3;
+    for (const [z, factor, rgba] of rings) {
+      for (let i = 0; i < segments; i++) {
+        const angle = (i / segments) * Math.PI * 2;
+        positions.push(Math.cos(angle) * radius * factor, Math.sin(angle) * radius * factor, z);
+        colors.push(...rgba);
+      }
     }
-  }
-
-  for (let r = 0; r < rings.length - 1; r++) {
-    for (let i = 0; i < segments; i++) {
-      const a = r * segments + i;
-      const b = r * segments + ((i + 1) % segments);
-      const c = a + segments;
-      const d = b + segments;
-      indices.push(a, b, d, a, d, c);
+    for (let r = 0; r < rings.length - 1; r++) {
+      for (let i = 0; i < segments; i++) {
+        const a = base + r * segments + i;
+        const b = base + r * segments + ((i + 1) % segments);
+        const c = a + segments;
+        const d = b + segments;
+        indices.push(a, b, d, a, d, c);
+      }
     }
   }
 
@@ -449,7 +469,7 @@ export function createSpaceEnvironment(sunDirection: Vector3): Scene {
   // Schattenseite eine schwarze Silhouette ohne jede Zeichnung.
   const fill = new Mesh(
     new SphereGeometry(20, 12, 10),
-    new MeshBasicMaterial({ color: 0x11202e }),
+    new MeshBasicMaterial({ color: 0x1c2b3a }),
   );
   fill.position.copy(sunDirection).normalize().multiplyScalar(-40);
   scene.add(fill);
