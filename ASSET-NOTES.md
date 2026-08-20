@@ -105,7 +105,7 @@ Verschleiss- und Gitterkacheln darueber.
 
 # ship-exterior.glb — Integrationsnotizen
 
-GLB: `public/models/ship-exterior.glb` (1,6 MB, 85 022 Dreiecke, 14 Materialien,
+GLB: `public/models/ship-exterior.glb` (2,2 MB, 85 022 Dreiecke, 238 Objekte, 14 Materialien,
 keine Bildtexturen). Root-Empty: `ShipExterior`.
 
 Wie der Innenraum wird das Modell **nicht von Hand gepflegt, sondern erzeugt**:
