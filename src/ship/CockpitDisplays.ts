@@ -126,11 +126,14 @@ export function litSegments(value: number, max: number, segments: number): numbe
  * Baender und Ziffern.
  */
 const SKIN = {
-  bg: '#161616',
-  well: '#282828',
-  grid: '#454545',
-  dim: '#9c9c9c',
-  ink: '#e4e4e4',
+  bg: '#111111',
+  well: '#222222',
+  grid: '#3d3d3d',
+  dim: '#9a9a9a',
+  ink: '#d8d8d8',
+  // Das Kopfband ist die groesste helle Flaeche; auf reinem Weiss brennt es
+  // durch den Bloom aus und frisst die Ziffern daneben mit auf.
+  band: '#c4c4c4',
   hot: '#ffffff',
 };
 
@@ -174,8 +177,9 @@ function value(
   font(p, size, 'bold');
   ctx.textAlign = align;
   ctx.textBaseline = 'alphabetic';
-  ctx.shadowColor = 'rgba(255,255,255,0.55)';
-  ctx.shadowBlur = size * 0.22;
+  // Nur ein Hauch Halo: den Rest macht der Bloom im Renderpfad.
+  ctx.shadowColor = 'rgba(255,255,255,0.45)';
+  ctx.shadowBlur = size * 0.10;
   ctx.fillStyle = color;
   ctx.fillText(text, x, y);
   ctx.shadowBlur = 0;
@@ -186,7 +190,7 @@ function value(
 function header(p: Paint, title: string, right = ''): number {
   const ctx = p.ctx;
   const h = Math.round(p.h * 0.115);
-  ctx.fillStyle = SKIN.ink;
+  ctx.fillStyle = SKIN.band;
   ctx.fillRect(0, 0, p.w, h);
   const ctxLs = ctx as CanvasRenderingContext2D & { letterSpacing?: string };
   font(p, h * 0.6, 'bold');
@@ -634,11 +638,10 @@ function setPlanarUv(mesh: Mesh, normal: Vector3, right: Vector3): void {
  * tragen jetzt Inhalt statt einer Leuchtflaeche — mit der Daempfung des Laders
  * (0,3) blieben sie im Cockpit unter der Wahrnehmungsschwelle.
  */
-const EMISSIVE_BOOST = 2.2;
+const EMISSIVE_BOOST = 1.45;
 
 interface Panel {
   def: ScreenDef;
-  canvas: HTMLCanvasElement;
   paint: Paint;
   texture: CanvasTexture;
   material: MeshStandardMaterial;
@@ -681,7 +684,9 @@ export class CockpitDisplays {
       const texture = new CanvasTexture(canvas);
       texture.colorSpace = SRGBColorSpace;
       texture.magFilter = LinearFilter;
-      texture.anisotropy = 4;
+      // Die Konsolenschirme liegen flach; ohne Anisotropie verschmiert die
+      // Schrift aus der Sitzposition zu Streifen.
+      texture.anisotropy = 8;
       texture.flipY = false; // glTF-UV-Konvention wie die uebrigen Screens
       material.emissiveMap = texture;
       material.emissiveIntensity *= EMISSIVE_BOOST;
@@ -689,7 +694,6 @@ export class CockpitDisplays {
 
       this.panels.push({
         def,
-        canvas,
         paint: { ctx, w: def.width, h: def.height, t: 0 },
         texture,
         material,
