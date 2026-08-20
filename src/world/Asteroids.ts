@@ -107,6 +107,9 @@ function chunkGeometry(seed: number): IcosahedronGeometry {
  * Asteroidenfeld als InstancedMesh rund um die Startposition.
  * Fuer Floating Origin einfach `field.position` mitverschieben.
  */
+/** Rueckfallwert fuer einen Platz ausserhalb des Feldes. */
+const _identity = new Quaternion();
+
 /** Groessenklasse zu einem Umriss-Radius. */
 function sizeClassFor(radius: number): AsteroidSize {
   for (const id of SIZE_IDS) {
@@ -378,6 +381,11 @@ export class Asteroids
 
   getMineral(index: number): MineralId {
     return this.minerals[index] ?? 'rock';
+  }
+
+  /** Lage des Brockens. Das Feld selbst ist nur verschoben, nie gedreht. */
+  getOrientation(index: number, out: Quaternion): Quaternion {
+    return out.copy(this.rotations[index] ?? _identity);
   }
 
   getSizeClass(index: number): AsteroidSize {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Vector3 } from 'three';
+import { Quaternion, Vector3 } from 'three';
 import { Asteroids } from './Asteroids';
 import { MINERAL_IDS, SIZE_CLASSES, yieldTons } from './AsteroidTypes';
 
@@ -228,6 +228,16 @@ describe('Asteroidenfeld als Bergbaurevier', () => {
     expect(field.isAlive(0)).toBe(true);
     // Der Vorrat des neuen Brockens ist unberuehrt.
     expect(field.getRemainingTons(0)).toBeCloseTo(field.getTotalTons(0));
+  });
+
+  it('meldet die Eigendrehung, damit ein Schiff darauf stehen bleiben kann', () => {
+    const f = new Asteroids({ count: 4, seed: 23 });
+    const before = f.getOrientation(0, new Quaternion());
+    f.update(2);
+    const after = f.getOrientation(0, new Quaternion());
+    // Die Brocken drehen sich langsam; nach zwei Sekunden ist das messbar.
+    expect(before.angleTo(after)).toBeGreaterThan(0);
+    expect(after.length()).toBeCloseTo(1);
   });
 
   it('tastet die Oberflaeche zwischen Beobachter und Mittelpunkt ab', () => {

@@ -1,4 +1,4 @@
-import type { Vector3 } from 'three';
+import type { Quaternion, Vector3 } from 'three';
 import type { GoodId } from '../cargo/CargoGoods';
 
 /**
@@ -168,6 +168,12 @@ export interface AsteroidField {
   getCenter(index: number, out: Vector3): Vector3;
   /** Grober Umriss in Metern — fuer Reichweiten und Radar. */
   getRadius(index: number): number;
+  /**
+   * Lage des Brockens in Weltkoordinaten. Wer auf einem Brocken aufsetzt, muss
+   * dessen Eigendrehung kennen — sonst dreht der Fels weg und das Schiff
+   * bleibt im Raum stehen.
+   */
+  getOrientation(index: number, out: Quaternion): Quaternion;
 
   getMineral(index: number): MineralId;
   getSizeClass(index: number): AsteroidSize;
