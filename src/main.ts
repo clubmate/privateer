@@ -105,6 +105,18 @@ const planet = new Planet({
 
 const asteroids = new Asteroids();
 
+// --- Landung ---
+// **Nur zur Abnahme.** Das heutige Feld erzeugt nichts groesser als 50 m, die
+// Klasse `huge` (ab 150 m) fehlt also komplett — und nur auf der laesst sich
+// landen. Zwei Planetoiden von Hand ins Feld setzen, damit es ueberhaupt einen
+// Landeplatz gibt. Faellt weg, sobald das neue Feld echte Grossbrocken liefert.
+import { addDebugPlanetoids } from './world/DebugPlanetoids';
+addDebugPlanetoids(asteroids, [
+  { position: new Vector3(0, -60, -900), radius: 300, spin: 0.05 },
+  { position: new Vector3(760, 90, -2000), radius: 190, spin: 0.08 },
+]);
+// --- Landung Ende ---
+
 const ship = new Ship();
 
 // Waffen: Geschosse und Effekte leben in Weltkoordinaten, nicht am Schiff.
@@ -180,8 +192,10 @@ const mining = new MiningSystem({
   field: asteroids,
   hold: cargo.hold,
   lineOfSight: createLineOfSight(asteroids),
-  // Hier haengt die Landung ihren Ertragsbonus ein:
-  // getYieldBonus: () => landing.getYieldBonus(),   // 1 = normal
+  // Wer auf einem Planetoiden aufgesetzt hat, foerdert deutlich schneller —
+  // das ist der Zweck der Landung. `landing` entsteht weiter unten; der
+  // Aufruf geschieht erst im Spiel, nicht hier.
+  getYieldBonus: () => landing.getYieldBonus(),
 });
 const miningBeam = new MiningBeam(effects);
 scene.add(miningBeam);
@@ -259,6 +273,26 @@ const player = new PlayerState({
   input, ship, camera, seated, walk, hud, interactables,
 });
 
+// --- Landung ---
+// Aufsetzen auf den Planetoiden (Taste L). Der Controller arbeitet nur gegen
+// das Interface `AsteroidField`, kennt also das Feld nur ueber seine Zusagen.
+// Er legt das Flugmodell still wie der Andockautopilot, setzt die Kollision
+// mit dem Landeplatz aus und meldet dem Bergbau spaeter seinen Ertragsbonus.
+import { LandingController } from './world/LandingController';
+const landing = new LandingController({
+  ship,
+  flight,
+  field: asteroids,
+  input,
+  getTargetIndex: () => targeting.getIndex(),
+  isWalking: () => player.isWalking,
+  setCollisionExempt: (index) => hull.setExemptIndex(index),
+  onImpulse: (amount) => shake.add(amount),
+});
+scene.add(landing.visuals);
+landing.visuals.traverse((child) => child.layers.set(WORLD_LAYER));
+// --- Landung Ende ---
+
 // ------------------------------------------------------- Innenraum aus Blender
 // Die Innenraummaterialien sind stark metallisch und brauchen eine
 // Reflexionsquelle, sonst bleiben sie schwarz. Nur der Innenraum bekommt diese
@@ -325,6 +359,7 @@ function applyFloatingOrigin(): void {
   mining.shift(originOffset); // --- Bergbau ---
   miningBeam.shift(originOffset); // --- Bergbau ---
   docking.shift(originOffset); // --- Raumstation ---
+  landing.shift(originOffset); // --- Landung ---
   // Starfield und Sonne folgen der Kamera und brauchen keine Verschiebung.
 }
 
@@ -357,6 +392,12 @@ function render(dt: number): void {
   // --- Raumstation --- Ringrotation, Anflug, Andockautopilot. Muss vor
   // `player.updateCamera()` laufen: der Autopilot setzt die Schiffspose.
   docking.update(dt);
+  // --- Landung --- Landeanflug, Aufsetzen, Abheben. Muss nach
+  // `asteroids.update()` laufen (der Brocken steht dann auf seiner aktuellen
+  // Lage) und vor `player.updateCamera()`, weil auch dieser Autopilot die
+  // Schiffspose setzt.
+  landing.update(dt);
+  // --- Landung Ende ---
 
   const target = targeting.update(
     asteroids,
@@ -479,6 +520,6 @@ Object.assign(window as unknown as Record<string, unknown>, {
     weapons, effects, asteroids, targeting, hull, shake, radar,
     post, renderer, displays, glass, cargo,
     station, docking, trade, damage, interactables,
-    mining, miningBeam, // --- Bergbau ---
+    mining, miningBeam, landing,
   },
 });

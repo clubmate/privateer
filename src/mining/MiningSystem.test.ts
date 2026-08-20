@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Vector3 } from 'three';
+import { Quaternion, Vector3 } from 'three';
 import { CargoHold } from '../cargo/CargoHold';
 import {
   MINERALS,
@@ -45,6 +45,11 @@ class FakeField implements AsteroidField {
 
   isAlive(index: number): boolean {
     return this.alive[index]!;
+  }
+
+  /** Die Attrappe dreht sich nicht; der Bergbau interessiert sich nicht dafuer. */
+  getOrientation(_index: number, out: Quaternion): Quaternion {
+    return out.identity();
   }
 
   getCenter(index: number, out: Vector3): Vector3 {
