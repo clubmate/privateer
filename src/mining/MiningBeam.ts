@@ -34,18 +34,30 @@ import type { MiningStatus } from './MiningSystem';
  * {@link MiningBeam.shift}.
  */
 
-/** Muendung des Foerderstrahls im Schiffssystem (Nase = -Z, unter dem Bug). */
-const MUZZLE: [number, number, number] = [0, -0.62, -3.4];
+/**
+ * Muendung des Foerderstrahls im Schiffssystem (Nase = -Z, unter dem Bug).
+ * Weit genug vor dem Augenpunkt: sitzt sie naeher, deckt der Strahl aus der
+ * Sitzposition das halbe Bild ab, egal wie duenn er ist.
+ */
+const MUZZLE: [number, number, number] = [0, -0.85, -4.6];
 
 /** Farbe des schneidenden Kerns — warm, deutlich anders als die Kanonen. */
-const BEAM_HOT = new Color(2.6, 1.5, 0.6);
-const BEAM_HALO = new Color(1.5, 0.55, 0.15);
+const BEAM_HOT = new Color(2.2, 1.05, 0.38);
+const BEAM_HALO = new Color(1.4, 0.45, 0.12);
 /** Der Scanstrahl ist kalt und duenn: er arbeitet nicht, er sieht nur nach. */
 const SCAN_COLOR = new Color(0.5, 1.6, 2.4);
 
 /** Halbmesser von Kern und Mantel in Metern. */
 const CORE_RADIUS = 0.16;
-const HALO_RADIUS = 0.62;
+const HALO_RADIUS = 0.5;
+
+/**
+ * Verjuengung zur Muendung hin. Ein gleich dicker Zylinder ist zwar richtig,
+ * sieht aus der Kanzel aber falsch aus: das nahe Ende steht perspektivisch
+ * riesig im Bild. Gebuendelt an der Muendung, aufgehend im Gestein — so liest
+ * man auch, in welche Richtung er arbeitet.
+ */
+const MUZZLE_TAPER = 0.28;
 
 /** Groesse des Partikelvorrats. Reicht fuer Dauerbetrieb plus Klumpenschlag. */
 const POOL_SIZE = 64;
@@ -115,7 +127,7 @@ function beamTexture(): CanvasTexture {
 
 /** Zylinder um +Y, offen, Einheitsmass — Laenge und Dicke kommen aus der Skalierung. */
 function beamMesh(map: CanvasTexture, color: Color, opacity: number): Mesh {
-  const geometry = new CylinderGeometry(1, 1, 1, 12, 1, true);
+  const geometry = new CylinderGeometry(1, MUZZLE_TAPER, 1, 12, 1, true);
   // Ursprung an das untere Ende legen: dann ist die Skalierung in Y direkt die
   // Laenge und die Position die Muendung.
   geometry.translate(0, 0.5, 0);
@@ -269,6 +281,11 @@ export class MiningBeam extends Group {
       _point
         .addScaledVector(_tangent, Math.sin(this.time * 11.3) * wobble)
         .addScaledVector(_bitangent, Math.sin(this.time * 7.9 + 1.7) * wobble);
+      // Ein Stueck in den Brocken hinein: der Strahl frisst ein Loch, er
+      // endet nicht davor. Solange {@link AsteroidField.sampleSurface} nur
+      // den Umriss abtastet, schliesst das ausserdem die sichtbare Luecke
+      // zwischen Kugel und der tatsaechlich schmaleren Geometrie.
+      _point.addScaledVector(status.hitNormal, -Math.min(2.5, status.targetRadius * 0.12));
     }
 
     _dir.subVectors(_point, muzzle);

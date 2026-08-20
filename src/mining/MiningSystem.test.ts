@@ -243,7 +243,9 @@ describe('Foerderstrahl', () => {
     run(mining, 60);
     mining.setBeam(false);
     run(mining, 0.1);
-    expect(hold.getTons('water')).toBeCloseTo(6, 3);
+    // Gebucht wird auf 10 kg genau; der Rest bleibt am Strahl haengen.
+    expect(hold.getTons('water')).toBeGreaterThan(5.98);
+    expect(hold.getTons('water')).toBeLessThanOrEqual(6);
     expect(field.getRemainingTons(0)).toBeCloseTo(0, 6);
     expect(mining.getStatus().message).toBe('BROCKEN ERSCHOEPFT');
   });
@@ -252,7 +254,8 @@ describe('Foerderstrahl', () => {
     const { hold, mining } = setup(['ice'], 500);
     mining.setBeam(true);
     run(mining, 400);
-    expect(hold.getUsedCapacity()).toBeCloseTo(hold.getCapacity(), 3);
+    expect(hold.getUsedCapacity()).toBeGreaterThan(hold.getCapacity() - 0.02);
+    expect(hold.getUsedCapacity()).toBeLessThanOrEqual(hold.getCapacity());
     expect(hold.getFreeCapacity()).toBeGreaterThanOrEqual(0);
     expect(mining.getStatus().message).toBe('LADERAUM VOLL');
   });

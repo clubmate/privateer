@@ -124,6 +124,8 @@ export interface MiningStatus {
   scanProgress: number;
   /** Entfernung zur Oberflaeche des Ziels in Metern. */
   distance: number;
+  /** Umriss des Ziels in Metern — die Darstellung setzt den Strahl danach an. */
+  targetRadius: number;
   /** Reichweite des Strahls in Metern (fuer Balken). */
   beamRange: number;
   /** Restvorrat des Brockens in Tonnen. */
@@ -205,6 +207,7 @@ export class MiningSystem {
     scanned: false,
     scanProgress: 0,
     distance: 0,
+    targetRadius: 0,
     beamRange: 0,
     remainingTons: 0,
     totalTons: 0,
@@ -312,8 +315,10 @@ export class MiningSystem {
     }
 
     this.field.getCenter(index, _center);
-    const distance = Math.max(_center.distanceTo(origin) - this.field.getRadius(index), 0);
+    const radius = this.field.getRadius(index);
+    const distance = Math.max(_center.distanceTo(origin) - radius, 0);
     s.distance = distance;
+    s.targetRadius = radius;
     s.mineral = this.getKnownMineral(index);
     s.scanned = s.mineral !== null;
     s.remainingTons = this.field.getRemainingTons(index);
@@ -364,6 +369,7 @@ export class MiningSystem {
     s.distance = 0;
     s.remainingTons = 0;
     s.totalTons = 0;
+    s.targetRadius = 0;
     s.batchProgress = 0;
     s.message = message;
   }
@@ -494,7 +500,11 @@ export class MiningSystem {
       this.pending = 0;
       return false;
     }
-    const take = Math.min(tons, this.pending, this.hold.getFreeCapacity());
+    // Auf 10 kg abgerundet: der Laderaum soll runde Posten fuehren. Was
+    // uebrig bleibt, haengt weiter an — verloren geht nichts, und die
+    // Stationsliste zeigt "12,4 T" statt "12,401934 T".
+    const room = Math.min(tons, this.pending, this.hold.getFreeCapacity());
+    const take = Math.floor(room * 100) / 100;
     if (take <= TON_EPSILON) return false;
 
     this.pending -= take;

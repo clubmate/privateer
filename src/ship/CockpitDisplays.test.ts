@@ -129,6 +129,7 @@ function miningStatus(overrides: Partial<MiningStatus> = {}): MiningStatus {
     scanned: false,
     scanProgress: 0,
     distance: 200,
+    targetRadius: 14,
     beamRange: 600,
     remainingTons: 40,
     totalTons: 80,

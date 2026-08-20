@@ -96,7 +96,7 @@ describe('markerOpacity', () => {
 function miningStatus(overrides: Partial<MiningStatus> = {}): MiningStatus {
   return {
     phase: 'idle', targetIndex: 2, mineral: null, scanned: false, scanProgress: 0,
-    distance: 200, beamRange: 600, remainingTons: 40, totalTons: 80, sessionTons: 0,
+    distance: 200, targetRadius: 14, beamRange: 600, remainingTons: 40, totalTons: 80, sessionTons: 0,
     batchProgress: 0, rate: 0, bonus: 1, beamActive: false, charge: 0,
     hitPoint: new Vector3(), hitNormal: new Vector3(0, 1, 0), hasHit: true,
     deliveries: 0, sinceDelivery: Infinity, message: 'BEREIT',
