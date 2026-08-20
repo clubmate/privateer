@@ -171,9 +171,13 @@
 .hud__keys {
   position: absolute;
   left: 22px;
+  /* Bis zum rechten Rand aufspannen: die Zeile ist laenger als ein schmales
+     Fenster und soll sauber umbrechen statt am Bildrand abzureissen. */
+  right: 22px;
   top: 18px;
   color: var(--hud-cyan-dim);
   font-size: 11px;
+  line-height: 1.7;
   opacity: 0.65;
 }
 
