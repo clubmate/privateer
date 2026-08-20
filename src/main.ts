@@ -170,6 +170,24 @@ import { setupCargo } from './cargo/setupCargo';
 const cargo = setupCargo({ ship, walk, flight, renderer, interactables });
 // --- /Fracht ---
 
+// --- Bergbau ---
+// Scanner (R) und Foerderstrahl (M). Die Logik kennt vom Feld nur das
+// Interface `AsteroidField`; der Strahl lebt wie Geschosse und Effekte in der
+// Weltschicht, sonst laege er im Nah-Durchgang immer vor den Brocken.
+import { createLineOfSight, MiningSystem } from './mining/MiningSystem';
+import { MiningBeam } from './mining/MiningBeam';
+const mining = new MiningSystem({
+  field: asteroids,
+  hold: cargo.hold,
+  lineOfSight: createLineOfSight(asteroids),
+  // Hier haengt die Landung ihren Ertragsbonus ein:
+  // getYieldBonus: () => landing.getYieldBonus(),   // 1 = normal
+});
+const miningBeam = new MiningBeam(effects);
+scene.add(miningBeam);
+miningBeam.traverse((child) => child.layers.set(WORLD_LAYER));
+// --- Bergbau Ende ---
+
 // --- Raumstation ---
 // Handelsposten gut 13 km voraus, seitlich am Asteroidenfeld vorbei. Das Maul
 // zeigt grob zum Startpunkt, aber um 24 Grad versetzt — der erste Anflug soll
@@ -304,6 +322,8 @@ function applyFloatingOrigin(): void {
   weapons.shift(originOffset);
   effects.shift(originOffset);
   hull.shift(originOffset);
+  mining.shift(originOffset); // --- Bergbau ---
+  miningBeam.shift(originOffset); // --- Bergbau ---
   docking.shift(originOffset); // --- Raumstation ---
   // Starfield und Sonne folgen der Kamera und brauchen keine Verschiebung.
 }
@@ -327,6 +347,7 @@ function fixedUpdate(dt: number): void {
   // Schadensmodell: Treffer auf die Subsysteme verteilen, Luft mitfuehren.
   damage.fixedUpdate(dt, impact);
   effects.update(dt);
+  mining.update(dt, targeting.getIndex(), ship.position); // --- Bergbau ---
   applyFloatingOrigin();
 }
 
@@ -366,6 +387,9 @@ function render(dt: number): void {
   deepCamera.quaternion.copy(worldCamera.quaternion);
   deepCamera.updateMatrixWorld();
 
+  // --- Bergbau --- Nach `updateMatrixWorld`: der Strahl sitzt an der Muendung.
+  miningBeam.update(dt, mining.getStatus(), ship);
+
   camera.getWorldPosition(cameraWorldPos);
   starfield.update(cameraWorldPos);
   sun.update(cameraWorldPos);
@@ -392,6 +416,7 @@ function render(dt: number): void {
     target,
     hull: hull.integrity,
     sinceImpact: hull.sinceImpact,
+    mining: mining.getStatus(), // --- Bergbau ---
   };
   displays.update(dt, hudState);
   glass.update(hudState);
@@ -415,6 +440,9 @@ renderer.setAnimationLoop(() => {
     forward.set(0, 0, -1).applyQuaternion(ship.quaternion);
     targeting.cycle(asteroids, ship.position, forward);
   }
+  // --- Bergbau --- R scannt den erfassten Brocken, M haelt den Foerderstrahl.
+  if (!player.isWalking && input.wasPressed('KeyR')) mining.requestScan();
+  mining.setBeam(!player.isWalking && input.isDown('KeyM'));
   // Gefeuert wird nur sitzend und mit gefangenem Zeiger.
   weapons.setTrigger(
     !player.isWalking &&
@@ -451,5 +479,6 @@ Object.assign(window as unknown as Record<string, unknown>, {
     weapons, effects, asteroids, targeting, hull, shake, radar,
     post, renderer, displays, glass, cargo,
     station, docking, trade, damage, interactables,
+    mining, miningBeam, // --- Bergbau ---
   },
 });

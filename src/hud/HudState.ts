@@ -1,6 +1,7 @@
 import type { PerspectiveCamera, Quaternion, Vector3 } from 'three';
 import type { FlightMode } from '../ship/FlightModel';
 import type { TargetInfo } from '../combat/Targeting';
+import type { MiningStatus } from '../mining/MiningSystem';
 
 /**
  * Der Zustand, den alle Anzeigen eines Frames sehen — die diegetischen
@@ -47,6 +48,11 @@ export interface HudState {
   hull: number;
   /** Sekunden seit dem letzten Zusammenstoss. */
   sinceImpact: number;
+  /**
+   * Bergbau: Scanwissen, Foerderung und Laderaum. Optional, damit Anzeigen
+   * auch ohne das Bordsystem laufen — dann bleiben die Zellen leer.
+   */
+  mining?: MiningStatus | null;
 }
 
 /** Beschriftung des Flugmodus, lang (DOM) und kurz (Schirme). */

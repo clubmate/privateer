@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Vector3 } from 'three';
-import { boxEdge, cursorDirection, CURSOR_SPAN, markerOpacity } from './GlassHud';
+import { boxEdge, cursorDirection, CURSOR_SPAN, markerOpacity, miningLine } from './GlassHud';
+import type { MiningStatus } from '../mining/MiningSystem';
 
 /**
  * Geprueft wird die Abbildung — wohin ein Zeichen zeigt und wie gross es
@@ -88,5 +89,43 @@ describe('markerOpacity', () => {
       expect(value).toBeLessThanOrEqual(last + 1e-9);
       last = value;
     }
+  });
+});
+
+/** Nur die Felder, die die Zeile unter der Zielklammer liest. */
+function miningStatus(overrides: Partial<MiningStatus> = {}): MiningStatus {
+  return {
+    phase: 'idle', targetIndex: 2, mineral: null, scanned: false, scanProgress: 0,
+    distance: 200, targetRadius: 14, beamRange: 600, remainingTons: 40, totalTons: 80, sessionTons: 0,
+    batchProgress: 0, rate: 0, bonus: 1, beamActive: false, charge: 0,
+    hitPoint: new Vector3(), hitNormal: new Vector3(0, 1, 0), hasHit: true,
+    deliveries: 0, sinceDelivery: Infinity, message: 'BEREIT',
+    cargoUsed: 0, cargoFree: 40, cargoCapacity: 40,
+    ...overrides,
+  };
+}
+
+describe('miningLine', () => {
+  it('bleibt ohne Ziel leer', () => {
+    expect(miningLine(null)).toBe('');
+    expect(miningLine(miningStatus({ targetIndex: -1 }))).toBe('');
+  });
+
+  it('nennt einen ungescannten Brocken UNBEKANNT', () => {
+    expect(miningLine(miningStatus())).toBe('UNBEKANNT');
+  });
+
+  it('zeigt waehrend des Scans den Fortschritt', () => {
+    expect(miningLine(miningStatus({ scanProgress: 0.25 }))).toBe('SCAN 25%');
+  });
+
+  it('zeigt beim Foerdern Kuerzel und Ausbeute des Brockens', () => {
+    const line = miningLine(miningStatus({ beamActive: true, mineral: 'ice', sessionTons: 3.25 }));
+    expect(line).toBe('H2O +3.3 T');
+  });
+
+  it('passt in die Breite der Leinwand', () => {
+    const long = miningLine(miningStatus({ mineral: 'crystal', scanned: true }));
+    expect(long.length).toBeLessThanOrEqual(17);
   });
 });
