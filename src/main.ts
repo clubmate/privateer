@@ -28,6 +28,11 @@ import { HullCollision } from './combat/HullCollision';
 import { CameraShake } from './player/CameraShake';
 import { RadarScreen } from './ship/RadarScreen';
 import { createPostprocessing, DEEP_LAYER, WORLD_LAYER } from './render/Postprocessing';
+// --- Raumstation ---
+import { Station } from './world/Station';
+import { DockingController } from './world/DockingController';
+import { createStationTradeStub } from './world/StationTrade';
+// --- Raumstation Ende ---
 
 const container = document.getElementById('app');
 if (!container) throw new Error('#app fehlt in index.html');
@@ -137,6 +142,27 @@ const hud = new Hud();
 const walk = new WalkController(input, ship);
 const player = new PlayerState({ input, ship, camera, seated, walk, hud });
 
+// --- Raumstation ---
+// Handelsposten gut 13 km voraus, seitlich am Asteroidenfeld vorbei. Das Maul
+// zeigt grob zum Startpunkt, aber um 24 Grad versetzt — der erste Anflug soll
+// eine Kurve verlangen, keine gerade Linie.
+const station = new Station();
+station.placeAt(new Vector3(0.36, 0.1, -0.93).normalize().multiplyScalar(13_400), 24);
+scene.add(station);
+// Wie bei der Sonne: die Station gehoert in die Weltschicht, ihr Buchtlicht
+// muss aber auch den Innenraum erreichen (siehe Station.setLayer).
+station.setLayer(WORLD_LAYER);
+// Reparatur greift schon jetzt auf die echte Huelle durch; Laderaum und
+// Credits haelt bis auf Weiteres die Attrappe (siehe world/StationTrade.ts).
+const trade = createStationTradeStub({
+  getHull: () => hull.integrity,
+  setHull: (value) => {
+    hull.integrity = value;
+  },
+});
+const docking = new DockingController({ ship, flight, station, input, trade });
+// --- Raumstation Ende ---
+
 // ------------------------------------------------------- Innenraum aus Blender
 // Die Innenraummaterialien sind stark metallisch und brauchen eine
 // Reflexionsquelle, sonst bleiben sie schwarz. Nur der Innenraum bekommt diese
@@ -195,6 +221,7 @@ function applyFloatingOrigin(): void {
   weapons.shift(originOffset);
   effects.shift(originOffset);
   hull.shift(originOffset);
+  docking.shift(originOffset); // --- Raumstation ---
   // Starfield und Sonne folgen der Kamera und brauchen keine Verschiebung.
 }
 
@@ -221,6 +248,9 @@ function fixedUpdate(dt: number): void {
 function render(dt: number): void {
   asteroids.update(dt);
   planet.update(dt);
+  // --- Raumstation --- Ringrotation, Anflug, Andockautopilot. Muss vor
+  // `player.updateCamera()` laufen: der Autopilot setzt die Schiffspose.
+  docking.update(dt);
 
   const target = targeting.update(
     asteroids,
@@ -319,5 +349,6 @@ Object.assign(window as unknown as Record<string, unknown>, {
     ship, flight, seated, walk, player, hud, camera, input, scene,
     weapons, effects, asteroids, targeting, hull, shake, radar,
     post, renderer,
+    station, docking, trade, // --- Raumstation ---
   },
 });
