@@ -1,5 +1,7 @@
 import type { StationInfo } from '../world/Station';
 import type { StationTrade, TradeResult } from '../world/StationTrade';
+// Gefoerderte Mengen sind krumm: 12,401934 T liest sich wie ein Messfehler.
+import { formatTons } from '../cargo/CargoHold';
 import './station.css';
 
 /**
@@ -250,7 +252,13 @@ export class StationPanel {
     buy.addEventListener('click', () => this.setStatus(this.trade.buy(id, this.amount)));
     const sell = el('button', 'stn__mini', 'VERKAUFEN');
     sell.type = 'button';
-    sell.addEventListener('click', () => this.setStatus(this.trade.sell(id, this.amount)));
+    // Aus dem Bergbau kommen krumme Mengen. Wer 25 T waehlt und 12,4 T an
+    // Bord hat, will die 12,4 loswerden — nicht sechsmal auf kleinere Knoepfe
+    // klicken.
+    sell.addEventListener('click', () => {
+      const held = this.heldTons(id);
+      this.setStatus(this.trade.sell(id, Math.min(this.amount, Math.floor(held))));
+    });
     actions.append(buy, sell);
 
     tr.append(buyPrice, sellPrice, stock, onboard, actions);
@@ -278,6 +286,11 @@ export class StationPanel {
     }
   }
 
+  /** Tonnen dieser Ware an Bord. */
+  private heldTons(id: string): number {
+    return this.trade.getManifest().find((e) => e.id === id)?.tons ?? 0;
+  }
+
   private refreshGoods(): void {
     const purse = this.trade.getCredits();
     const capacity = this.trade.getCapacity();
@@ -294,7 +307,7 @@ export class StationPanel {
       setText(row.buyPrice, credits(good.buyPrice));
       setText(row.sellPrice, credits(good.sellPrice));
       setText(row.stock, `${good.stock} T`);
-      setText(row.onboard, `${held} T`);
+      setText(row.onboard, `${formatTons(held)} T`);
       row.onboard.classList.toggle('is-zero', held === 0);
 
       setDisabled(
@@ -303,18 +316,18 @@ export class StationPanel {
           free < this.amount ||
           good.buyPrice * this.amount > purse,
       );
-      setDisabled(row.sell, held < this.amount);
+      setDisabled(row.sell, held < 1);
     }
   }
 
   private refreshHold(): void {
     const { used, total } = this.trade.getCapacity();
-    setText(this.holdValue, `${used} / ${total} T`);
+    setText(this.holdValue, `${formatTons(used)} / ${total} T`);
     this.holdFill.style.width = `${total > 0 ? (used / total) * 100 : 0}%`;
 
     const entries = this.trade.getManifest();
     const text = entries.length
-      ? entries.map((e) => `${e.tons} T ${e.name}`).join('  ·  ')
+      ? entries.map((e) => `${formatTons(e.tons)} T ${e.name}`).join('  ·  ')
       : 'LEER';
     setText(this.manifest, text);
   }

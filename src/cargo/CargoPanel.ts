@@ -122,8 +122,10 @@ export class CargoPanel {
       row.append(
         name,
         element('td', undefined, formatTons(lot.tons)),
-        element('td', undefined, credits(lot.avgPrice)),
-        element('td', undefined, credits(lot.avgPrice * lot.tons)),
+        // Einstandspreis 0 heisst selbst gefoerdert — „0 Cr" laese sich, als
+        // waere die Ladung wertlos.
+        element('td', undefined, lot.avgPrice > 0 ? credits(lot.avgPrice) : 'EIGEN'),
+        element('td', undefined, lot.avgPrice > 0 ? credits(lot.avgPrice * lot.tons) : '—'),
       );
       this.body.appendChild(row);
     }
