@@ -44,7 +44,7 @@ const BAY_HALF_W = 32;
 const BAY_FLOOR_Y = 40;
 
 /** Liegeplatz des Schiffs in der Bucht. */
-const DOCK_LOCAL = new Vector3(0, 46, 70);
+const DOCK_LOCAL = new Vector3(0, 46, 80);
 
 export interface StationInfo {
   name: string;
@@ -545,11 +545,29 @@ export class Station extends Object3D {
     box(bay, MAT.plateDark, [5, 49, depth], [BAY_HALF_W + 2.5, BAY_CENTER_Y, z]);
     box(bay, MAT.plate, [72, 49, 5], [0, BAY_CENTER_Y, BAY_BACK_Z - 2.5]);
 
-    // Leuchtende Rueckwand plus zwei Streifen an den Seitenwaenden.
-    box(bay, MAT.glowAmber, [54, 32, 0.8], [0, BAY_CENTER_Y, BAY_BACK_Z + 0.6]);
-    box(bay, MAT.plateDark, [58, 4, 1.2], [0, BAY_CENTER_Y + 18, BAY_BACK_Z + 1.2]);
+    // Rueckwand: keine grosse Leuchtflaeche, sondern Baender vor dunklem
+    // Blech. Eine einzige Emissivplatte fuellt aus dem Liegeplatz das halbe
+    // Blickfeld und sieht aus wie eine orange Wand — mit Baendern, Zielmarke
+    // und Aufbauten bleibt die Tiefe der Bucht lesbar.
+    for (let i = 0; i < 7; i++) {
+      const x = -24 + i * 8;
+      box(bay, MAT.glowAmberSoft, [2.6, 22, 0.8], [x, BAY_CENTER_Y + 2, BAY_BACK_Z + 0.7]);
+      box(bay, MAT.plateDark, [4.6, 24, 1.4], [x + 4, BAY_CENTER_Y + 2, BAY_BACK_Z + 1.6]);
+    }
+    // Aufgemalte Zielmarke ueber den Baendern.
+    box(bay, MAT.plateLight, [34, 1.2, 1], [0, BAY_CENTER_Y + 17, BAY_BACK_Z + 1.4]);
+    box(bay, MAT.plateLight, [1.2, 9, 1], [0, BAY_CENTER_Y + 21, BAY_BACK_Z + 1.4]);
     for (const side of [-1, 1] as const) {
-      box(bay, MAT.glowAmberSoft, [0.8, 26, depth - 12], [side * (BAY_HALF_W - 0.6), BAY_CENTER_Y + 4, z]);
+      box(bay, MAT.plateLight, [1.2, 7, 1], [side * 16, BAY_CENTER_Y + 20, BAY_BACK_Z + 1.4]);
+      // Zwei schmale Leuchtstreifen ziehen den Blick in die Tiefe.
+      box(bay, MAT.glowAmberSoft, [0.8, 2.2, depth - 12], [side * (BAY_HALF_W - 0.6), BAY_CENTER_Y + 14, z]);
+      box(bay, MAT.glowAmberSoft, [0.8, 2.2, depth - 12], [side * (BAY_HALF_W - 0.6), BAY_CENTER_Y - 8, z]);
+      // Rohrleitungen und Wandkraene — Massstab innerhalb der Bucht.
+      for (let i = 0; i < 4; i++) {
+        const pz = BAY_BACK_Z + 12 + i * 18;
+        box(bay, MAT.steel, [3, 3, 14], [side * (BAY_HALF_W - 3), BAY_CENTER_Y + 19, pz]);
+        box(bay, MAT.plateDark, [5, 9, 5], [side * (BAY_HALF_W - 4), BAY_FLOOR_Y + 6, pz]);
+      }
     }
 
     // Aufgestellte Lippen am Maul — fangen das Licht und weisen den Weg hinein.
@@ -618,7 +636,7 @@ export class Station extends Object3D {
 
     // Ein Licht in der Bucht: es faellt beim Andocken durch die Kanzel und
     // taucht das Cockpit in warmes Licht.
-    const light = new PointLight(0xffb069, 2600, 320, 2);
+    const light = new PointLight(0xffb069, 1300, 340, 2);
     light.position.set(0, BAY_CENTER_Y + 12, z);
     bay.add(light);
     return light;
