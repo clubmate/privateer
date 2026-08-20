@@ -1,10 +1,11 @@
 import type { Ship } from '../ship/Ship';
-import type { WalkController } from '../player/WalkController';
+import { CAPSULE_RADIUS, type WalkController } from '../player/WalkController';
 import { Interactables } from '../player/Interactables';
 import { CargoHold, formatTons, type CargoHoldOptions } from './CargoHold';
 import { CargoPanel } from './CargoPanel';
 import { CargoVisuals } from './CargoVisuals';
 import { trackCargoMass, type MassCarrier } from './CargoMass';
+import { evadeStowage } from './CargoStowage';
 import { GOODS, type GoodId } from './CargoGoods';
 
 /**
@@ -16,13 +17,6 @@ import { GOODS, type GoodId } from './CargoGoods';
 
 /** Reichweite des Manifest-Prompts am Stapel. */
 const ANCHOR_RANGE = 1.7;
-
-/**
- * Durchgaenge der Entklemmung, nachdem neue Kisten erschienen sind. Ein
- * einzelner reicht nicht: die Kapsel wird aus der Kiste gedrueckt, landet
- * dabei womoeglich in der Bordwand und muss von dort noch einmal heraus.
- */
-const UNSTICK_PASSES = 4;
 
 /** Startladung, damit der Frachtraum nicht bei jedem Spielstart leer ist. */
 const INITIAL_LOAD: ReadonlyArray<[GoodId, number]> = [
@@ -70,15 +64,33 @@ export function setupCargo(options: SetupCargoOptions): CargoSystem {
     onCollidersChanged: () => {
       ship.refreshColliders();
       walk.rebuildCollision();
-      // Eine Kiste kann genau dort erscheinen, wo der Spieler steht. Ein
-      // Schritt mit dt=0 bewegt nichts, loest aber die Durchdringung auf —
-      // man wird zur Seite geschoben, statt in der Kiste festzustecken.
-      for (let i = 0; i < UNSTICK_PASSES; i++) walk.update(0);
+      evadeNewCrates();
     },
     onGeometryChanged: () => {
       renderer.shadowMap.needsUpdate = true;
     },
   });
+
+  /**
+   * Eine Kiste kann genau dort erscheinen, wo der Spieler steht — dann wird er
+   * zur Seite geschoben.
+   *
+   * Der Frachtraum rechnet in GLB-Koordinaten, der WalkController im
+   * Schiffslokalraum; dazwischen liegen 180 Grad um Y, also kippen x und z das
+   * Vorzeichen (siehe InteriorLoader).
+   */
+  function evadeNewCrates(): void {
+    const units = visuals.getPlan().units;
+    if (units.length === 0) return;
+
+    const free = evadeStowage(-walk.position.x, -walk.position.z, CAPSULE_RADIUS, units);
+    if (!free) return;
+    walk.position.x = -free.x;
+    walk.position.z = -free.z;
+    // Sonst laeuft der Spieler mit der alten Geschwindigkeit sofort zurueck.
+    walk.velocity.x = 0;
+    walk.velocity.z = 0;
+  }
 
   // Der Innenraum kommt erst spaeter aus dem GLB; `onInteriorChange` ruft
   // sofort mit dem aktuellen und danach bei jedem Wechsel.

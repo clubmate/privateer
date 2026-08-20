@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CargoHold } from './CargoHold';
 import { CONTAINER_HEIGHT, GOODS, GOOD_IDS, UNIT_DEPTH, UNIT_WIDTH, unitCount } from './CargoGoods';
-import { planStowage, STOW_SLOTS, stowageCapacity, type StowedUnit } from './CargoStowage';
+import { evadeStowage, planStowage, STOW_SLOTS, stowageCapacity, type StowedUnit } from './CargoStowage';
 
 /** Grenzen des Frachtraums in GLB-Innenraumkoordinaten (ASSET-NOTES.md). */
 const BAY = { minX: -1.45, maxX: 1.45, minZ: -5.2, maxZ: -1.2, ceiling: 2.3 };
@@ -261,5 +261,57 @@ describe('planStowage', () => {
     const plan = planStowage([{ good: 'food', tons: 40 }], [STOW_SLOTS[0]]);
     expect(plan.units.length).toBeLessThan(unitCount(GOODS.food, 40));
     expect(plan.overflow).toBe(unitCount(GOODS.food, 40) - plan.units.length);
+  });
+});
+
+describe('evadeStowage', () => {
+  const fullUnits = () => {
+    const hold = new CargoHold();
+    hold.add('ore', 10);
+    hold.add('water', 8);
+    hold.add('food', 10);
+    hold.add('electronics', 12);
+    return planStowage(hold.getManifest()).units;
+  };
+
+  it('laesst einen freien Standpunkt in Ruhe', () => {
+    const units = planStowage([{ good: 'ore', tons: 6 }]).units;
+    // Mitte des Gangs, weit weg von den beiden belegten Wandplaetzen.
+    expect(evadeStowage(0, -2.0, RADIUS, units)).toBeNull();
+  });
+
+  it('schiebt aus einer Kiste heraus und nicht in die naechste', () => {
+    const units = fullUnits();
+    const slot = STOW_SLOTS.find((entry) => entry.id === 'A1')!;
+    const free = evadeStowage(slot.x, slot.z, RADIUS, units);
+
+    expect(free).not.toBeNull();
+    for (const unit of units) {
+      const overlapX = Math.abs(free!.x - unit.x) < unit.width / 2 + RADIUS - 1e-9;
+      const overlapZ = Math.abs(free!.z - unit.z) < unit.depth / 2 + RADIUS - 1e-9;
+      expect(overlapX && overlapZ, `steckt noch in ${unit.slot}/${unit.level}`).toBe(false);
+    }
+  });
+
+  it('schiebt nicht durch die Bordwand und nicht in die Werkbank', () => {
+    const units = fullUnits();
+    for (const slot of STOW_SLOTS) {
+      const free = evadeStowage(slot.x, slot.z, RADIUS, units);
+      if (!free) continue;
+      expect(free.x).toBeGreaterThanOrEqual(BAY.minX + RADIUS - 1e-9);
+      expect(free.x).toBeLessThanOrEqual(BAY.maxX - RADIUS + 1e-9);
+      expect(free.z).toBeGreaterThanOrEqual(BAY.minZ + RADIUS - 1e-9);
+      expect(free.z).toBeLessThanOrEqual(BAY.maxZ - RADIUS + 1e-9);
+      // Werkbank: x -1,60 .. -0,90 bei z -2,40 .. -1,30.
+      const inBench = free.x < -0.9 + RADIUS && free.z > -2.4 - RADIUS && free.z < -1.3 + RADIUS;
+      expect(inBench, `${slot.id} landet in der Werkbank`).toBe(false);
+    }
+  });
+
+  it('weicht nur ein kleines Stueck aus, nicht quer durch den Raum', () => {
+    const units = fullUnits();
+    const slot = STOW_SLOTS.find((entry) => entry.id === 'A2')!;
+    const free = evadeStowage(slot.x, slot.z, RADIUS, units)!;
+    expect(Math.hypot(free.x - slot.x, free.z - slot.z)).toBeLessThan(1.2);
   });
 });

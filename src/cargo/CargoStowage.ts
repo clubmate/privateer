@@ -202,3 +202,64 @@ export function stowageCapacity(
   for (const slot of slots) count += Math.floor(slot.headroom / height + 1e-6);
   return count;
 }
+
+/** Grenzen der begehbaren Flaeche im Frachtraum (GLB-Koordinaten). */
+const BAY_MIN_X = -1.45;
+const BAY_MAX_X = 1.45;
+const BAY_MIN_Z = -5.2;
+const BAY_MAX_Z = -1.2;
+
+/** Werkbank backbord — steht fest im Weg und gehoert in die Ausweichrechnung. */
+const BENCH = { maxX: -0.9, minZ: -2.4, maxZ: -1.3 };
+
+/** Schrittweite und Reichweite der Ausweichsuche in Metern. */
+const EVADE_STEP = 0.05;
+const EVADE_LIMIT = 1.6;
+
+/** Liegt der Punkt mit Radius `r` frei? */
+function isClear(x: number, z: number, r: number, units: readonly StowedUnit[]): boolean {
+  if (x < BAY_MIN_X + r || x > BAY_MAX_X - r) return false;
+  if (z < BAY_MIN_Z + r || z > BAY_MAX_Z - r) return false;
+  if (x < BENCH.maxX + r && z > BENCH.minZ - r && z < BENCH.maxZ + r) return false;
+  for (const unit of units) {
+    const hw = unit.width / 2 + r;
+    const hd = unit.depth / 2 + r;
+    if (Math.abs(x - unit.x) < hw && Math.abs(z - unit.z) < hd) return false;
+  }
+  return true;
+}
+
+/**
+ * Naechster freier Standpunkt, wenn eine Kiste genau dort erscheint, wo der
+ * Spieler steht.
+ *
+ * **Warum eine eigene Rechnung und nicht die Penetrationsaufloesung des
+ * WalkControllers:** die schiebt entlang des kuerzesten Fluchtwegs, und der
+ * zeigt bei einer Kiste auf Kniehoehe nach unten. Wer in einem dreifachen
+ * Stapel steht, wird so Lage um Lage nach unten gedrueckt und faellt am Ende
+ * durch den Boden aus dem Schiff. Seitlich ausweichen ist hier die einzig
+ * richtige Richtung — man wird zur Seite geschoben, nicht versenkt.
+ *
+ * Gibt `null` zurueck, wenn der Punkt schon frei ist oder sich in Reichweite
+ * kein freier finden laesst. Koordinaten sind GLB-Innenraumkoordinaten.
+ */
+export function evadeStowage(
+  x: number,
+  z: number,
+  radius: number,
+  units: readonly StowedUnit[],
+): { x: number; z: number } | null {
+  if (isClear(x, z, radius, units)) return null;
+
+  for (let distance = EVADE_STEP; distance <= EVADE_LIMIT; distance += EVADE_STEP) {
+    // Ringweise nach aussen; der erste freie Punkt gewinnt, also der naechste.
+    const steps = Math.max(8, Math.round((2 * Math.PI * distance) / EVADE_STEP));
+    for (let i = 0; i < steps; i++) {
+      const angle = (i / steps) * Math.PI * 2;
+      const cx = x + Math.cos(angle) * distance;
+      const cz = z + Math.sin(angle) * distance;
+      if (isClear(cx, cz, radius, units)) return { x: cx, z: cz };
+    }
+  }
+  return null;
+}
