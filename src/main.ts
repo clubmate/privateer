@@ -36,7 +36,7 @@ import { createPostprocessing, DEEP_LAYER, WORLD_LAYER } from './render/Postproc
 // --- Raumstation ---
 import { Station } from './world/Station';
 import { DockingController } from './world/DockingController';
-import { createStationTradeStub } from './world/StationTrade';
+import { createCargoStationTrade } from './world/CargoStationTrade';
 // --- Raumstation Ende ---
 
 const container = document.getElementById('app');
@@ -176,9 +176,11 @@ scene.add(station);
 // Wie bei der Sonne: die Station gehoert in die Weltschicht, ihr Buchtlicht
 // muss aber auch den Innenraum erreichen (siehe Station.setLayer).
 station.setLayer(WORLD_LAYER);
-// Reparatur greift schon jetzt auf die echte Huelle durch; Laderaum und
-// Credits haelt bis auf Weiteres die Attrappe (siehe world/StationTrade.ts).
-const trade = createStationTradeStub({
+// Das Menue handelt mit dem echten Laderaum: gekaufte Ware steht hinterher
+// als Kiste im Frachtraum, verkaufte verschwindet. Die Reparatur greift auf
+// die echte Huelle durch.
+const trade = createCargoStationTrade({
+  hold: cargo.hold,
   getHull: () => hull.integrity,
   setHull: (value) => {
     hull.integrity = value;
