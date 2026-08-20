@@ -59,9 +59,13 @@ export const STOW_SLOTS: readonly StowSlot[] = [
   // an Bett und Schrank gar nicht mehr heran.
   { id: 'P2', x: -1.08, z: -3.04, headroom: 1.4, aisle: false },
   { id: 'S3', x: 1.08, z: -2.18, headroom: 1.4, aisle: false },
-  // Der Gang, versetzt backbord/steuerbord/backbord.
+  // Der Gang. Alle drei Plaetze liegen auf **derselben** Seite, und das ist
+  // kein Schoenheitsfehler: die Reihen stehen nur 0,08 m auseinander, ein
+  // Slalom von Reihe zu Reihe waere fuer eine 0,60 m breite Kapsel schlicht
+  // nicht passierbar. So bleibt eine durchgehende Gasse von 0,84 m — eng
+  // genug, dass man sich vorbeischiebt, breit genug, dass man durchkommt.
   { id: 'A0', x: -0.4, z: -3.9, headroom: 1.4, aisle: true },
-  { id: 'A1', x: 0.4, z: -3.04, headroom: 1.4, aisle: true },
+  { id: 'A1', x: -0.4, z: -3.04, headroom: 1.4, aisle: true },
   { id: 'A2', x: -0.4, z: -2.18, headroom: 1.4, aisle: true },
 ];
 

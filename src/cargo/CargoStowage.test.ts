@@ -7,7 +7,7 @@ import { planStowage, STOW_SLOTS, stowageCapacity, type StowedUnit } from './Car
 const BAY = { minX: -1.45, maxX: 1.45, minZ: -5.2, maxZ: -1.2, ceiling: 2.3 };
 
 /** Kapsel des Spielers (WalkController): Radius 0,3 m. */
-const PLAYER_DIAMETER = 0.6;
+const RADIUS = 0.3;
 
 function footprint(unit: StowedUnit): { minX: number; maxX: number; minZ: number; maxZ: number } {
   // Die Streuung dreht die Kisten nur um wenige Grad; fuer die Platzpruefung
@@ -19,6 +19,63 @@ function footprint(unit: StowedUnit): { minX: number; maxX: number; minZ: number
     minZ: unit.z - unit.depth / 2 - grow,
     maxZ: unit.z + unit.depth / 2 + grow,
   };
+}
+
+/**
+ * Wie weit kommt der Spieler von der Frachtraumtuer aus nach achtern?
+ *
+ * Eine Pruefung Querschnitt fuer Querschnitt reicht dafuer nicht: sie findet
+ * in jeder Scheibe eine Luecke und uebersieht, dass zwei Luecken auf
+ * verschiedenen Seiten liegen koennen. Ein Koerper mit Radius kommt dann
+ * nirgends hindurch. Deshalb echte Erreichbarkeit auf einem Gitter, mit um den
+ * Kapselradius aufgeblasenen Hindernissen. Rueckgabe ist das kleinste (also
+ * achterlichste) erreichbare z.
+ */
+function reachableDepth(units: readonly StowedUnit[]): number {
+  const boxes = units.map(footprint);
+  const step = 0.05;
+
+  const blocked = (x: number, z: number): boolean => {
+    for (const box of boxes) {
+      if (
+        x > box.minX - RADIUS && x < box.maxX + RADIUS
+        && z > box.minZ - RADIUS && z < box.maxZ + RADIUS
+      ) return true;
+    }
+    // Werkbank backbord.
+    if (x < -0.9 + RADIUS && z > -2.4 - RADIUS && z < -1.3 + RADIUS) return true;
+    // Bordwaende.
+    return x < BAY.minX + RADIUS || x > BAY.maxX - RADIUS;
+  };
+
+  const minIz = Math.ceil(BAY.minZ / step);
+  const maxIz = Math.floor(-1.25 / step);
+  const minIx = Math.ceil(BAY.minX / step);
+  const maxIx = Math.floor(BAY.maxX / step);
+  const key = (ix: number, iz: number) => `${ix}:${iz}`;
+
+  // Start: die ganze Breite der Frachtraumtuer.
+  const queue: Array<[number, number]> = [];
+  for (let ix = minIx; ix <= maxIx; ix++) {
+    if (!blocked(ix * step, maxIz * step)) queue.push([ix, maxIz]);
+  }
+  expect(queue.length, 'Frachtraumtuer ist zugestellt').toBeGreaterThan(0);
+
+  const seen = new Set(queue.map(([ix, iz]) => key(ix, iz)));
+  let deepest = maxIz * step;
+  while (queue.length > 0) {
+    const [ix, iz] = queue.pop()!;
+    deepest = Math.min(deepest, iz * step);
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const nx = ix + dx;
+      const nz = iz + dz;
+      if (nx < minIx || nx > maxIx || nz < minIz || nz > maxIz) continue;
+      if (seen.has(key(nx, nz)) || blocked(nx * step, nz * step)) continue;
+      seen.add(key(nx, nz));
+      queue.push([nx, nz]);
+    }
+  }
+  return deepest;
 }
 
 function fullHold(good: (typeof GOOD_IDS)[number]): CargoHold {
@@ -56,6 +113,13 @@ describe('Stellplaetze', () => {
         expect(overlapX && overlapZ).toBe(false);
       }
     }
+  });
+
+  it('legt alle Gangplaetze auf dieselbe Seite', () => {
+    // Ein Slalom von Reihe zu Reihe waere nicht passierbar: die Reihen stehen
+    // nur 0,08 m auseinander, die Spielerkapsel ist 0,60 m tief.
+    const aisleX = STOW_SLOTS.filter((slot) => slot.aisle).map((slot) => Math.sign(slot.x));
+    expect(new Set(aisleX).size).toBe(1);
   });
 
   it('fuellt Wand und Heck vor dem Gehweg', () => {
@@ -163,32 +227,29 @@ describe('planStowage', () => {
     expect(plan.aisleSlotsUsed).toBeGreaterThan(0);
   });
 
-  it('laesst auch bei voller Ladung ueberall einen Durchgang', () => {
+  it('laesst auch bei voller Ladung einen begehbaren Weg nach achtern', () => {
     const hold = new CargoHold();
     hold.add('ore', 10);
     hold.add('water', 8);
     hold.add('food', 10);
     hold.add('electronics', 12);
-    const boxes = planStowage(hold.getManifest()).units.map(footprint);
 
-    // Der Frachtraum wird in Querschnitte zerlegt; in jedem muss zwischen den
-    // Kisten eine Luecke fuer die Spielerkapsel bleiben. Ausgenommen ist das
-    // Heck ab z -4,20: dort ist Stauraum, kein Weg.
-    for (let z = -4.2; z <= -1.25; z += 0.05) {
-      const spans = boxes
-        .filter((box) => box.minZ <= z && box.maxZ >= z)
-        .map((box) => [box.minX, box.maxX] as const)
-        .sort((a, b) => a[0] - b[0]);
+    // Bis vor die achterste Reihe muss man kommen. Weiter hinten ist kein Weg:
+    // S0, P0 und C0 stehen dort nebeneinander und schliessen den Raum ab —
+    // das ist Stauraum, kein Gang.
+    expect(reachableDepth(planStowage(hold.getManifest()).units)).toBeLessThanOrEqual(-4.0);
+  });
 
-      let cursor = BAY.minX;
-      let widest = 0;
-      for (const [min, max] of spans) {
-        widest = Math.max(widest, min - cursor);
-        cursor = Math.max(cursor, max);
-      }
-      widest = Math.max(widest, BAY.maxX - cursor);
-      expect(widest, `Querschnitt bei z=${z.toFixed(2)}`).toBeGreaterThanOrEqual(PLAYER_DIAMETER);
-    }
+  it('ist leer deutlich weiter begehbar als voll', () => {
+    const hold = new CargoHold();
+    hold.add('ore', 6);
+    const leicht = reachableDepth(planStowage(hold.getManifest()).units);
+
+    hold.add('food', 20);
+    hold.add('electronics', 14);
+    const voll = reachableDepth(planStowage(hold.getManifest()).units);
+
+    expect(leicht).toBeLessThan(voll);
   });
 
   it('stellt dieselbe Ladung immer gleich hin', () => {
