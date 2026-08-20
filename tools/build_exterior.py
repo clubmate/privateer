@@ -93,7 +93,9 @@ NOSE_FRONT = 5.80                       # Nasenkeil
 
 # Querschnitte: halbe Breite, Oberkante, Unterkante, Fase.
 TAIL_W, TAIL_TOP, TAIL_BOT, TAIL_CH = 1.74, 2.62, -0.74, 0.42
-BODY_W, BODY_TOP, BODY_BOT, BODY_CH = 2.12, 2.88, -0.88, 0.55
+# Die Breite des Frachtrumpfs ist nicht frei: die Spindbank des Innenraums
+# reicht bis x = 2,11, und die Haut muss darueber hinweg.
+BODY_W, BODY_TOP, BODY_BOT, BODY_CH = 2.22, 2.88, -0.88, 0.55
 NECK_W, NECK_TOP, NECK_BOT, NECK_CH = 1.32, 2.46, -0.70, 0.40
 HEAD_W, HEAD_TOP, HEAD_BOT, HEAD_CH = 1.98, 2.66, -0.72, 0.48
 
@@ -134,7 +136,10 @@ MATERIALS = {
     'Hazard':          ((0.55, 0.42, 0.06, 1), 0.00, 0.65, None),
     'Marking':         ((0.62, 0.60, 0.55, 1), 0.00, 0.72, None),
     'Glass':           ((0.26, 0.32, 0.36, 1), 0.00, 0.05, None),
-    'Nozzle_Glow':     ((0.30, 0.10, 0.02, 1), 0.00, 0.40, (1.00, 0.44, 0.14)),
+    # Basisfarbe fast schwarz: die Duesenglut kommt aus dem emissiven Anteil und
+    # wird zur Laufzeit ueber den Schub geregelt. Eine helle Basis leuchtet auch
+    # bei abgestelltem Triebwerk und sieht dann nach rosa Kunststoff aus.
+    'Nozzle_Glow':     ((0.04, 0.02, 0.01, 1), 0.00, 0.40, (1.00, 0.42, 0.12)),
     'Lamp_Red':        ((0.24, 0.02, 0.02, 1), 0.00, 0.35, (1.00, 0.10, 0.08)),
     'Lamp_Green':      ((0.02, 0.22, 0.06, 1), 0.00, 0.35, (0.16, 1.00, 0.30)),
     'Lamp_White':      ((0.30, 0.30, 0.32, 1), 0.00, 0.35, (1.00, 0.96, 0.88)),
@@ -853,23 +858,21 @@ def build_nacelles(b):
                  for a in [i * pi / 4 + pi / 8 for i in range(8)]], bevel=0.006)
 
         # --- Ausleger zum Rumpf: Traeger plus zwei Rundstreben.
+        px0, px1 = sorted((sx * (BODY_W - 0.20), sx * (NAC_X - 0.74)))
         pylon = [
-            ring(-5.60, *sorted((sx * (BODY_W - 0.20), sx * (NAC_X - 0.70))),
-                 0.72, 2.02, (0.16, 0.16, 0.16, 0.16)),
-            ring(-4.55, *sorted((sx * (BODY_W - 0.20), sx * (NAC_X - 0.70))),
-                 0.82, 1.94, (0.16, 0.16, 0.16, 0.16)),
-            ring(-3.50, *sorted((sx * (BODY_W - 0.20), sx * (NAC_X - 0.70))),
-                 0.94, 1.80, (0.16, 0.16, 0.16, 0.16)),
+            ring(-5.70, px0, px1, 0.86, 2.06, (0.16, 0.16, 0.16, 0.16)),
+            ring(-4.60, px0, px1, 0.96, 1.98, (0.16, 0.16, 0.16, 0.16)),
+            ring(-3.55, px0, px1, 1.06, 1.84, (0.16, 0.16, 0.16, 0.16)),
         ]
         tube(b, f'SM_Pylon_{tag}', 'Hull_Olive', pylon, None)
         # Zwei Rundstreben vor und hinter dem Traeger — die Gondel haengt
         # sichtbar an etwas, statt am Rumpf zu kleben.
-        for i, (z, r) in enumerate(((-6.20, 0.09), (-2.85, 0.075))):
+        for i, (z, r) in enumerate(((-6.30, 0.09), (-3.30, 0.075))):
             b.cylinder(f'SM_Pylon_{tag}_Strut{i}', 'Metal_Bare',
-                       (sx * 2.28, NAC_Y, z), r, 0.90, axis='x')
+                       (sx * 2.50, NAC_Y, z), r, 1.60, axis='x')
         # Rohrleitungen entlang des Auslegers, sichtbar von unten.
         b.boxes(f'SM_Pylon_{tag}_Clamps', 'Metal_Bare',
-                [((sx * (NAC_X - 0.68 - i * 0.30), 0.74, -4.55), (0.10, 0.10, 0.44))
+                [((sx * (NAC_X - 0.80 - i * 0.32), 0.86, -4.60), (0.10, 0.12, 0.44))
                  for i in range(4)], bevel=0.006)
 
     # --- Manoevrierduesen am Heck, links und rechts der Mitte.
@@ -1027,8 +1030,8 @@ def build_plating(b):
                 height = min(height, BODY_TOP - BODY_CH - 0.15 - y)
                 if height < 0.22:
                     break
-                item = ((sx * (BODY_W + 0.008), y + height / 2, z + length / 2),
-                        (0.016, height - 0.045, length - 0.045))
+                item = ((sx * (BODY_W + 0.011), y + height / 2, z + length / 2),
+                        (0.022, height - 0.05, length - 0.05))
                 bucket = rng.random()
                 (plates if bucket < 0.55 else panels if bucket < 0.85 else trim).append(item)
                 y += height
@@ -1068,6 +1071,46 @@ def build_plating(b):
     b.boxes('SM_Plate_Top', 'Hull_Panel', top_plates, bevel=0.005)
     b.boxes('SM_Plate_Bottom', 'Hull_Panel', bottom_plates, bevel=0.005)
 
+    # --- Ausbuchtung ueber der Koje. Die Koje sitzt innen in einer Nische, die
+    # bis x = 2,28 reicht und damit weiter aussen als die Haut. Statt den ganzen
+    # Rumpf dafuer zu verbreitern bekommt er an genau dieser Stelle eine Beule —
+    # was ohnehin plausibler aussieht als ein durchgehend fetter Kasten.
+    sx = STAR
+    blister = [
+        ring(-4.15, *sorted((sx * (BODY_W - 0.10), sx * 2.30)), 0.30, 1.60,
+             (0.18, 0.18, 0.18, 0.18)),
+        ring(-3.90, *sorted((sx * (BODY_W - 0.10), sx * 2.46)), 0.16, 1.76,
+             (0.22, 0.22, 0.22, 0.22)),
+        ring(-2.30, *sorted((sx * (BODY_W - 0.10), sx * 2.46)), 0.16, 1.76,
+             (0.22, 0.22, 0.22, 0.22)),
+        ring(-2.05, *sorted((sx * (BODY_W - 0.10), sx * 2.30)), 0.30, 1.60,
+             (0.18, 0.18, 0.18, 0.18)),
+    ]
+    tube(b, 'SM_Blister', 'Hull_Paint', blister, None)
+    b.boxes('SM_Blister_Ribs', 'Metal_Bare',
+            [((sx * 2.40, 0.96, z), (0.16, 1.56, 0.07)) for z in (-3.80, -2.42)],
+            bevel=0.006)
+    b.box('SM_Blister_Vent', 'Metal_Dark', (sx * 2.48, 1.50, -3.10), (0.06, 0.26, 0.60))
+
+    # --- Taille: die kuerzeste Sektion, aber von der Seite gut sichtbar. Ohne
+    # Zutat ist sie eine olivgruene Tafel. Also Rohre laengs, ein Wartungsfeld
+    # und ein kleines Bullauge auf Kopfhoehe des Gangs.
+    for tag, sx in SIDES:
+        x = sx * (NECK_W + 0.02)
+        b.boxes(f'SM_Neck_{tag}_Ribs', 'Metal_Bare', [
+            ((x, 1.96, 0.10), (0.05, 0.10, 2.30)),
+            ((x, 0.42, 0.10), (0.05, 0.10, 2.30)),
+            ((x, 1.20, -0.62), (0.05, 1.30, 0.09)),
+            ((x, 1.20, 0.78), (0.05, 1.30, 0.09)),
+        ], bevel=0.005)
+        b.box(f'SM_Neck_{tag}_Panel', 'Hull_Panel', (x, 0.95, -0.10), (0.04, 0.90, 0.90))
+        b.box(f'SM_Neck_{tag}_Port', 'Metal_Bare', (x + sx * 0.02, 1.62, 0.55),
+              (0.06, 0.34, 0.34))
+        b.box(f'SM_Neck_{tag}_Glass', 'Glass', (x + sx * 0.05, 1.62, 0.55),
+              (0.03, 0.24, 0.24))
+        b.cylinder(f'SM_Neck_{tag}_Pipe', 'Metal_Rust', (x + sx * 0.06, 0.20, 0.10),
+                   0.06, 2.40)
+
     # --- Einstiegsluke steuerbord. Mannshoch — sie ist der Massstab, an dem
     # das Auge die Groesse des ganzen Schiffs abliest.
     sx = STAR
@@ -1080,6 +1123,41 @@ def build_plating(b):
     b.boxes('SM_Door_Steps', 'Metal_Bare',
             [((x + sx * 0.14, 0.10 - i * 0.34, -1.95 - 0.10), (0.30, 0.06, 0.52))
              for i in range(2)], bevel=0.006)
+
+    # --- Cockpitkasten und Bugholme. Beide sind von der Seite gross im Bild und
+    # ohne Beplankung die kahlsten Flaechen des ganzen Schiffs.
+    for tag, sx in SIDES:
+        x = sx * (HEAD_W + 0.011)
+        b.boxes(f'SM_Plate_Head{tag}', 'Hull_Panel', [
+            ((x, 1.85, 1.95), (0.022, 0.86, 0.90)),
+            ((x, 1.85, 2.62), (0.022, 0.86, 0.36)),
+            ((x, 0.95, 2.28), (0.022, 0.80, 1.36)),
+            ((x, 0.12, 1.95), (0.022, 0.60, 0.90)),
+        ], bevel=0.005)
+        b.boxes(f'SM_Plate_Head{tag}_Trim', 'Metal_Bare', [
+            ((sx * (HEAD_W + 0.02), 1.40, 2.15), (0.05, 0.07, 1.40)),
+            ((sx * (HEAD_W + 0.02), 2.30, 2.15), (0.05, 0.09, 1.40)),
+        ], bevel=0.005)
+
+        # Holme unter der Kanzel: Bleche, Griffleiste, Tankstutzen.
+        xf = sx * 1.80
+        b.boxes(f'SM_Plate_Fore{tag}', 'Hull_Panel', [
+            ((xf, 0.52, 3.32), (0.022, 0.82, 0.76)),
+            ((sx * 1.72, 0.48, 4.10), (0.022, 0.74, 0.64)),
+        ], bevel=0.005)
+        b.box(f'SM_Fore_Rub{tag}', 'Rubber_Black', (sx * 1.86, 0.86, 3.40),
+              (0.06, 0.09, 1.00))
+        b.cylinder(f'SM_Fore_Fill{tag}', 'Metal_Bare', (sx * 1.80, 0.30, 3.10), 0.10, 0.10,
+                   axis='x')
+
+        # Registriernummer klein auf dem Cockpitkasten — dort, wo sie im
+        # Seitenriss frei steht und nicht hinter der Gondel verschwindet.
+        cell = 0.055
+        span = (4 * 6 - 1) * cell
+        b.boxes(f'SM_RegHead_{tag}', 'Marking',
+                glyph_boxes('PV-114', (sx * (HEAD_W + 0.024), 2.06, 2.16 + sx * span / 2),
+                            cell, sx),
+                bevel=0.003)
 
     # --- Sensorpod backbord, Suchscheinwerfer steuerbord: die Asymmetrie, die
     # ein gebautes Schiff von einem gespiegelten Modell unterscheidet.
@@ -1210,9 +1288,12 @@ def build_lights(b):
     """
     lamps = [
         # (Name, Material, Position, Groesse, Markername, Glutradius)
-        ('NavPort', 'Lamp_Red', (PORT * (NAC_X + 0.80), NAC_Y + 0.30, -2.35),
+        # Die Navigationslichter sitzen auf den Gondelflanken, dem breitesten
+        # Punkt des Schiffs — dort erfuellen sie ihren Zweck und markieren
+        # gleichzeitig die Spannweite.
+        ('NavPort', 'Lamp_Red', (PORT * (NAC_X + 0.84), NAC_Y + 0.22, -3.90),
          (0.16, 0.14, 0.24), 'Nav_Port', 0.16),
-        ('NavStar', 'Lamp_Green', (STAR * (NAC_X + 0.80), NAC_Y + 0.30, -2.35),
+        ('NavStar', 'Lamp_Green', (STAR * (NAC_X + 0.84), NAC_Y + 0.22, -3.90),
          (0.16, 0.14, 0.24), 'Nav_Star', 0.16),
         ('BeaconTop', 'Lamp_White', (0, BODY_TOP + 0.12, -1.62), (0.20, 0.14, 0.20),
          'Beacon_Top', 0.14),
@@ -1231,8 +1312,8 @@ def build_lights(b):
     # Formationslichter: schwache Streifen entlang der Gondeln.
     for tag, sx in SIDES:
         b.boxes(f'SM_Form_{tag}', 'Lamp_White',
-                [((sx * (NAC_X + 0.83), NAC_Y + 0.40, z), (0.02, 0.05, 0.40))
-                 for z in (-3.20, -5.40)], bevel=0.004)
+                [((sx * (NAC_X + 0.85), NAC_Y + 0.40, z), (0.02, 0.05, 0.40))
+                 for z in (-4.60, -5.90)], bevel=0.004)
 
     # Muendungsmarker der Triebwerke. Die Skalierung transportiert den Radius
     # der Glut; die Laufzeit haengt Flammen und Leuchtscheiben daran auf.
