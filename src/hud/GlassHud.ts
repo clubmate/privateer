@@ -383,8 +383,9 @@ export class GlassHud {
    */
   update(state: HudState): void {
     // Beim Gehen ist das Flug-HUD aus; der Spieler sitzt nicht an den Kanonen.
-    this.group.visible = !state.walking;
-    if (state.walking) return;
+    // Von aussen ebenfalls: die Symbole liegen vor der Kanzel, nicht im Raum.
+    this.group.visible = !state.walking && !state.external;
+    if (state.walking || state.external) return;
 
     const camera = state.camera;
     camera.getWorldPosition(_eyeWorld);

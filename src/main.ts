@@ -210,6 +210,9 @@ loadShipExterior(`${import.meta.env.BASE_URL}models/ship-exterior.glb`, renderer
     console.warn('Aussenrumpf-GLB nicht geladen, Aussenansicht bleibt aus:', error);
   });
 
+/** Steht die Kamera gerade hinter dem Schiff? Die Anzeigen richten sich danach. */
+let externalView = false;
+
 /** Laeuft im Renderpfad direkt nach `player.updateCamera()`. */
 function updateExteriorView(dt: number): void {
   const mode = chase.update(dt, {
@@ -217,7 +220,8 @@ function updateExteriorView(dt: number): void {
     speed: flight.getSpeed(),
     toggle: input.wasPressed(CHASE_KEY),
   });
-  exterior?.setVisible(mode === 'chase');
+  externalView = mode === 'chase';
+  exterior?.setVisible(externalView);
   exterior?.update(dt, flight);
 }
 // --- Ende Aussenansicht ---
@@ -361,6 +365,7 @@ function render(dt: number): void {
     fullStop: flight.fullStop,
     afterburner: flight.inputs.afterburner,
     walking: player.isWalking,
+    external: externalView,
     pointerLocked: input.pointerLocked,
     mouseOffset: seated.getMouseOffset(),
     kills: weapons.kills,

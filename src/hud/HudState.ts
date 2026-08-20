@@ -29,6 +29,11 @@ export interface HudState {
   afterburner: boolean;
   /** Der Spieler steht auf und geht: kein Flug-HUD auf der Scheibe. */
   walking: boolean;
+  /**
+   * Die Verfolgerkamera ist an. Die Scheibenprojektion haengt am Cockpit und
+   * schwebte von aussen betrachtet frei im Raum vor dem Schiff.
+   */
+  external: boolean;
   pointerLocked: boolean;
   /** Virtueller Mausoffset, -1..1 (y positiv = unten). */
   mouseOffset: { x: number; y: number };
