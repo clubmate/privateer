@@ -7,7 +7,19 @@
  * sondern auch ihr Gebinde, ihre Lackfarbe und ihr Kuerzel fuer den Aufkleber.
  */
 
-export type GoodId = 'ore' | 'water' | 'food' | 'parts' | 'electronics' | 'contraband';
+export type GoodId =
+  | 'ore'
+  | 'water'
+  | 'food'
+  | 'parts'
+  | 'electronics'
+  | 'contraband'
+  // Aus dem Bergbau: siehe world/AsteroidTypes.ts. Erz und Eis fallen in die
+  // vorhandenen Posten `ore` und `water` — geschmolzenes Eis ist Wasser.
+  | 'copper'
+  | 'silicon'
+  | 'platinum'
+  | 'crystal';
 
 /**
  * Gebindeart. Bestimmt Form und Hoehe eines Stellplatz-Gebindes und damit
@@ -119,6 +131,50 @@ export const GOODS: Record<GoodId, Good> = {
     color: 0x24211f,
     accent: 0xb4342a,
     hazard: true,
+  },
+  copper: {
+    id: 'copper',
+    name: 'Kupfererz',
+    code: 'CU',
+    volumePerTon: 0.135,
+    container: 'bin',
+    basePrice: 58,
+    color: 0x4e4136,
+    accent: 0x2f9c7a,
+    hazard: false,
+  },
+  silicon: {
+    id: 'silicon',
+    name: 'Siliziumerz',
+    code: 'SI',
+    volumePerTon: 0.145,
+    container: 'bin',
+    basePrice: 74,
+    color: 0x5a5a5e,
+    accent: 0xb9bcc4,
+    hazard: false,
+  },
+  platinum: {
+    id: 'platinum',
+    name: 'Platinerz',
+    code: 'PT',
+    volumePerTon: 0.105,
+    container: 'case',
+    basePrice: 410,
+    color: 0x3f3d42,
+    accent: 0xdcd8c8,
+    hazard: false,
+  },
+  crystal: {
+    id: 'crystal',
+    name: 'Resonanzkristall',
+    code: 'KRS',
+    volumePerTon: 0.19,
+    container: 'case',
+    basePrice: 690,
+    color: 0x312e42,
+    accent: 0x8f6fe8,
+    hazard: false,
   },
 };
 

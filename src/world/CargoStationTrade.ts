@@ -29,7 +29,12 @@ const BUY_MARKUP = 1.35;
 /** Abschlag beim Ankauf vom Spieler. Die Spanne ist der Gewinn der Station. */
 const SELL_MARKDOWN = 0.82;
 
-/** Anfangsvorrat je Ware in Tonnen. Knappe Waren sind die teuren. */
+/**
+ * Anfangsvorrat je Ware in Tonnen. Knappe Waren sind die teuren.
+ *
+ * Was aus dem Bergbau kommt, haelt die Station nur in kleinen Mengen vor: sie
+ * ist dafuer der Abnehmer, nicht die Quelle. Wer Platin will, faehrt raus.
+ */
 const INITIAL_STOCK: Record<GoodId, number> = {
   ore: 180,
   water: 240,
@@ -37,6 +42,10 @@ const INITIAL_STOCK: Record<GoodId, number> = {
   parts: 46,
   electronics: 24,
   contraband: 6,
+  copper: 12,
+  silicon: 8,
+  platinum: 0,
+  crystal: 0,
 };
 
 /** Preis je Prozentpunkt Huelle. */

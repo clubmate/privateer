@@ -4,9 +4,11 @@ import { GOODS, GOOD_IDS, isGoodId, tonsPerUnit, unitCount } from './CargoGoods'
 import { applyCargoMass, trackCargoMass } from './CargoMass';
 
 describe('Warenkatalog', () => {
-  it('kennt genau die sechs Warenarten und erkennt Fremdes', () => {
-    expect(GOOD_IDS).toHaveLength(6);
+  it('kennt die zehn Warenarten und erkennt Fremdes', () => {
+    expect(GOOD_IDS).toHaveLength(10);
     expect(isGoodId('ore')).toBe(true);
+    // Aus dem Bergbau, siehe world/AsteroidTypes.ts.
+    expect(isGoodId('platinum')).toBe(true);
     expect(isGoodId('plutonium')).toBe(false);
   });
 
