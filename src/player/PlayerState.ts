@@ -5,6 +5,7 @@ import type { Hud } from '../hud/Hud';
 import type { Ship } from '../ship/Ship';
 import type { SeatedController } from './SeatedController';
 import type { WalkController } from './WalkController';
+import { labelOf, type Interactable, type Interactables } from './Interactables';
 
 export type PlayerMode = 'seated' | 'walking';
 
@@ -28,6 +29,8 @@ export interface PlayerStateDeps {
   seated: SeatedController;
   walk: WalkController;
   hud: Hud;
+  /** Anfassbare Punkte an Bord; fehlt sie, gibt es nur den Sitz. */
+  interactables?: Interactables;
 }
 
 const _mat = new Matrix4();
@@ -65,6 +68,7 @@ export class PlayerState {
   private readonly seated: SeatedController;
   private readonly walk: WalkController;
   private readonly hud: Hud;
+  private readonly interactables: Interactables | undefined;
 
   constructor(deps: PlayerStateDeps) {
     this.input = deps.input;
@@ -73,6 +77,7 @@ export class PlayerState {
     this.seated = deps.seated;
     this.walk = deps.walk;
     this.hud = deps.hud;
+    this.interactables = deps.interactables;
 
     this.refreshInterior();
   }
@@ -148,23 +153,41 @@ export class PlayerState {
   private updateWalking(dt: number): void {
     this.walk.updateLook();
 
-    const near = this.isNearSeat();
-    if (near && this.input.wasPressed(TOGGLE_KEY)) {
-      this.sitDown();
-      return;
+    // Sitz und angemeldete Interaktionspunkte konkurrieren um dieselbe Taste;
+    // es gewinnt, was naeher ist. Sonst verdeckt eine Reparaturstelle im
+    // Cockpit den Hinsetzen-Prompt (oder umgekehrt).
+    const seatDistance = this.seatDistance();
+    const item = this.interactables?.findNearest(this.walk.position) ?? null;
+    const itemDistance = item
+      ? this.interactables!.distanceTo(this.walk.position, item)
+      : Infinity;
+    const seatWins = seatDistance < SIT_RANGE && seatDistance <= itemDistance;
+    const active: Interactable | null = seatWins ? null : item;
+
+    if (this.input.wasPressed(TOGGLE_KEY)) {
+      if (seatWins) {
+        this.sitDown();
+        return;
+      }
+      if (active) {
+        active.activate();
+        return;
+      }
     }
 
     if (this.infoTimer > 0) this.infoTimer -= dt;
 
-    if (near) this.hud.showPrompt(PROMPT_SIT);
+    if (seatWins) this.hud.showPrompt(PROMPT_SIT);
+    else if (active) this.hud.showPrompt(labelOf(active));
     else if (this.infoTimer > 0) this.hud.showPrompt(PROMPT_WALK_HELP);
     else this.hud.hidePrompt();
   }
 
-  private isNearSeat(): boolean {
+  /** Horizontaler Abstand zum Sitzmarker im Schiffslokalraum. */
+  private seatDistance(): number {
     const dx = this.walk.position.x - this.seatLocal.x;
     const dz = this.walk.position.z - this.seatLocal.z;
-    return Math.hypot(dx, dz) < SIT_RANGE;
+    return Math.hypot(dx, dz);
   }
 
   // ------------------------------------------------------------ Uebergaenge
