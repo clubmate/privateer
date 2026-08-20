@@ -91,7 +91,7 @@ export class Hud {
         </div>
       </div>
 
-      <div class="hud__keys hud__keys--flight">MAUS/LEER FEUERN &middot; T ZIEL &middot; W/S SET SPEED &middot; Q/E ROLL &middot; A/D STRAFE &middot; SHIFT/CTRL LIFT &middot; X FULL STOP &middot; V FLUGMODUS &middot; TAB BURN &middot; H HILFSANZEIGE &middot; F AUFSTEHEN</div>
+      <div class="hud__keys hud__keys--flight">MAUS/LEER FEUERN &middot; T ZIEL &middot; R SCAN &middot; M FOERDERN &middot; W/S SET SPEED &middot; Q/E ROLL &middot; A/D STRAFE &middot; SHIFT/CTRL LIFT &middot; X FULL STOP &middot; V FLUGMODUS &middot; TAB BURN &middot; H HILFSANZEIGE &middot; F AUFSTEHEN</div>
       <div class="hud__keys hud__keys--walk">W/A/S/D GEHEN &middot; MAUS UMSEHEN &middot; F AM SITZ HINSETZEN</div>
       <div class="hud__damage"></div>
       <div class="hud__prompt" hidden></div>

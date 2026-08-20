@@ -10,6 +10,9 @@ import {
 } from 'three';
 import type { Object3D } from 'three';
 import { HULL_WARN, MODE_SHORT, type HudState } from '../hud/HudState';
+import { MINERALS } from '../world/AsteroidTypes';
+import { formatTons } from '../cargo/CargoHold';
+import type { MiningStatus } from '../mining/MiningSystem';
 
 /**
  * Die Instrumente des Schiffs — auf den Schirmen, die im Cockpit wirklich
@@ -22,7 +25,7 @@ import { HULL_WARN, MODE_SHORT, type HudState } from '../hud/HudState';
  * nicht ueber Farbe laufen, sondern nur ueber Blinken und Invertierung.
  *
  * Aufteilung (siehe {@link SCREENS}):
- *  - ein MFD Antrieb/Flug, eines Ziel/Gefecht,
+ *  - ein MFD Antrieb/Flug, eines Ziel/Gefecht (mit Scanner und Foerderung),
  *  - Overhead-Panel Kurs und Lage,
  *  - Gangschirm Schiffsstatus fuer den, der hinten steht,
  *  - Werkbankschirm im Frachtraum.
@@ -96,6 +99,31 @@ export function closingRate(
   if (distance < 1e-3) return 0;
   _rel.subVectors(targetVelocity, shipVelocity);
   return -_rel.dot(_delta) / distance;
+}
+
+/**
+ * Was im Kopfband des Zielschirms steht: der Inhalt des Brockens. Ungescannt
+ * heisst "UNBEKANNT" — nicht "kein Erz", denn foerdern kann man trotzdem.
+ */
+export function mineralHeadline(mining?: MiningStatus | null): string {
+  if (!mining || mining.targetIndex < 0) return 'FREI';
+  if (!mining.mineral) return 'UNBEKANNT';
+  return MINERALS[mining.mineral].name.toUpperCase();
+}
+
+/**
+ * Zeile und Balkenfuellung fuer den Vorgang, der gerade laeuft: erst der Scan,
+ * dann die Foerderung, sonst die Meldung des Systems.
+ */
+export function miningActivity(mining?: MiningStatus | null): { text: string; fill: number } {
+  if (!mining) return { text: '', fill: 0 };
+  if (mining.scanProgress > 0 && mining.scanProgress < 1) {
+    return { text: `SCAN ${Math.round(mining.scanProgress * 100)}%`, fill: mining.scanProgress };
+  }
+  if (mining.beamActive) {
+    return { text: `FOERDERUNG ${mining.rate.toFixed(2)} T/S`, fill: mining.batchProgress };
+  }
+  return { text: mining.message, fill: 0 };
 }
 
 /** Entfernung fuer die Schirme: unter 1 km in Metern, darueber in Kilometern. */
@@ -352,38 +380,71 @@ const drawDrive: Draw = (p, s) => {
   scanlines(p);
 };
 
-/** MFD rechts: Gefecht. Ziel oben, eigene Huelle unten. */
+/**
+ * MFD rechts: Gefecht **und** Bergbau. Oben der erfasste Brocken — Entfernung,
+ * Naeherung, Vorrat, Zustand — darunter der laufende Vorgang (Scan oder
+ * Foerderung), unten das eigene Schiff. Der Inhalt des Brockens steht im
+ * Kopfband: das ist die Zeile, die der Pilot ohnehin zuerst liest.
+ */
 const drawCombat: Draw = (p, s) => {
   clear(p);
   const target = s.target;
-  const top = header(p, 'ZIEL', target ? 'ERFASST' : 'FREI');
+  const m = s.mining ?? null;
+  const top = header(p, 'ZIEL', target ? mineralHeadline(m) : 'FREI');
   const pad = 12;
-  const mid = Math.round(p.h * 0.60);
+  const mid = Math.round(p.h * 0.68);
+  const half = Math.round((p.w - pad * 2 - 12) / 2);
 
   if (!target) {
     label(p, 'KEIN ZIEL', pad, top + 38, 17);
-    label(p, 'T ERFASST DEN NAECHSTEN BROCKEN', pad, top + 60, 11, SKIN.grid);
+    label(p, 'T ERFASST DEN NAECHSTEN BROCKEN', pad, top + 58, 11, SKIN.grid);
+    label(p, 'R SCANNT  ·  M FOERDERT', pad, top + 74, 11, SKIN.grid);
     // Suchlauf: ein Strich, der wandert, damit der Schirm nicht tot wirkt.
     const x = pad + ((p.t * 0.5) % 1) * (p.w - pad * 2);
     p.ctx.fillStyle = SKIN.grid;
-    p.ctx.fillRect(pad, top + 78, p.w - pad * 2, 1);
+    p.ctx.fillRect(pad, top + 88, p.w - pad * 2, 1);
     p.ctx.fillStyle = SKIN.ink;
-    p.ctx.fillRect(x - 12, top + 76, 24, 4);
+    p.ctx.fillRect(x - 12, top + 86, 24, 4);
+    if (m) {
+      label(p, 'LADERAUM', pad, top + 118, 11);
+      value(p, `${formatTons(m.cargoUsed)} / ${formatTons(m.cargoCapacity)} T`,
+        p.w - pad, top + 118, 16, 'right', SKIN.ink);
+      gauge(p, pad, top + 124, p.w - pad * 2, 8, ratio(m.cargoUsed, m.cargoCapacity), 20);
+    }
   } else {
     label(p, `BROCKEN ${target.index.toString().padStart(3, '0')}`, pad, top + 20);
     const range = formatRange(target.distance);
     const [number, unit] = range.split(' ');
-    value(p, number!, pad - 2, top + 68, 44);
+    value(p, number!, pad - 2, top + 64, 40);
     const numberWidth = p.ctx.measureText(number!).width;
-    label(p, unit!, pad + numberWidth + 8, top + 68, 15, SKIN.ink);
+    label(p, unit!, pad + numberWidth + 8, top + 64, 15, SKIN.ink);
 
     const rate = closingRate(target.position, target.velocity, s.position, s.velocity);
     label(p, 'NAEHERUNG', p.w - pad - 112, top + 20);
-    value(p, `${rate >= 0 ? '+' : ''}${Math.round(rate)}`, p.w - pad, top + 56, 28, 'right', SKIN.ink);
+    value(p, `${rate >= 0 ? '+' : ''}${Math.round(rate)}`, p.w - pad, top + 52, 26, 'right', SKIN.ink);
 
-    label(p, 'INTEGRITAET', pad, mid - 26);
-    gauge(p, pad, mid - 20, p.w - pad * 2 - 68, 10, target.integrity, 16);
-    value(p, `${Math.round(target.integrity * 100)}%`, p.w - pad, mid - 10, 18, 'right', SKIN.ink);
+    // Zwei Spalten: was drinsteckt (Bergbau) und was noch steht (Gefecht).
+    const rowY = top + 83;
+    label(p, 'VORRAT', pad, rowY, 11);
+    value(p, m ? `${formatTons(m.remainingTons)} T` : '- - -', pad + half, rowY, 16, 'right', SKIN.ink);
+    gauge(p, pad, rowY + 4, half, 8, m ? ratio(m.remainingTons, m.totalTons) : 0, 12);
+
+    const rightX = pad + half + 12;
+    label(p, 'INTEGRITAET', rightX, rowY, 11);
+    value(p, `${Math.round(target.integrity * 100)}%`, p.w - pad, rowY, 16, 'right', SKIN.ink);
+    gauge(p, rightX, rowY + 4, half, 8, target.integrity, 12);
+
+    // Der laufende Vorgang ueber die volle Breite — das ist die Zeile, an der
+    // der Pilot sieht, dass ueberhaupt etwas passiert.
+    const actY = top + 111;
+    const activity = miningActivity(m);
+    const warn = m !== null && !m.beamActive && m.scanProgress <= 0 && m.message !== 'BEREIT';
+    label(p, activity.text, pad, actY, 12, warn && blink(p.t, 2) > 0 ? SKIN.hot : SKIN.ink);
+    if (m) {
+      value(p, `LADUNG ${formatTons(m.cargoUsed)}/${formatTons(m.cargoCapacity)} T`,
+        p.w - pad, actY, 13, 'right', SKIN.dim);
+    }
+    gauge(p, pad, actY + 4, p.w - pad * 2, 6, activity.fill, 32);
   }
 
   // Trennlinie: unten geht es um das eigene Schiff.
@@ -521,8 +582,16 @@ const drawCorridor: Draw = (p, s) => {
   label(p, 'SEKTOR', pad, top + 181);
   label(p, sectorLabel(s.position), p.w - pad - 136, top + 181, 14, SKIN.ink);
 
-  // Zeile fuer Fracht und Andocken, sobald es sie gibt.
-  reserved(p, pad, p.h - 36, p.w - pad * 2, 28, 'FRACHT / DOCK');
+  // Ladung: die Zahl, wegen der man ueberhaupt nach hinten geht.
+  const m = s.mining ?? null;
+  if (m) {
+    label(p, 'LADUNG', pad, p.h - 40, 11);
+    value(p, `${formatTons(m.cargoUsed)} / ${formatTons(m.cargoCapacity)} T`,
+      p.w - pad, p.h - 40, 16, 'right', SKIN.ink);
+    gauge(p, pad, p.h - 34, p.w - pad * 2, 10, ratio(m.cargoUsed, m.cargoCapacity), 20);
+  } else {
+    reserved(p, pad, p.h - 36, p.w - pad * 2, 28, 'FRACHT / DOCK');
+  }
   scanlines(p);
 };
 
@@ -539,7 +608,16 @@ const drawBench: Draw = (p, s) => {
   const cellW = (p.w - pad * 2 - 8) / 2;
   const cellY = top + 96;
   const cellH = (p.h - cellY - pad - 8) / 2;
-  reserved(p, pad, cellY, cellW, cellH, 'FRACHT');
+  const m = s.mining ?? null;
+  if (m) {
+    well(p, pad, cellY, cellW, cellH);
+    label(p, 'FRACHT', pad + 6, cellY + 16, 11);
+    value(p, `${formatTons(m.cargoUsed)} T`, pad + cellW - 6, cellY + 16, 16, 'right', SKIN.ink);
+    label(p, `FREI ${formatTons(m.cargoFree)} T`, pad + 6, cellY + 32, 11);
+    gauge(p, pad + 6, cellY + cellH - 14, cellW - 12, 8, ratio(m.cargoUsed, m.cargoCapacity), 14);
+  } else {
+    reserved(p, pad, cellY, cellW, cellH, 'FRACHT');
+  }
   reserved(p, pad + cellW + 8, cellY, cellW, cellH, 'TEILE');
   reserved(p, pad, cellY + cellH + 8, cellW, cellH, 'REPARATUR');
   reserved(p, pad + cellW + 8, cellY + cellH + 8, cellW, cellH, 'ENERGIE');

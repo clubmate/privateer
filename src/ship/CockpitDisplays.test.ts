@@ -8,7 +8,10 @@ import {
   ratio,
   sectorLabel,
   SECTOR_SIZE,
+  mineralHeadline,
+  miningActivity,
 } from './CockpitDisplays';
+import type { MiningStatus } from '../mining/MiningSystem';
 
 /**
  * Getestet wird, was rechenbar ist: Lage, Sektor, Naeherungsrate, Formate.
@@ -112,5 +115,74 @@ describe('Balken und Formate', () => {
     expect(formatRange(999)).toBe('999 M');
     expect(formatRange(1000)).toBe('1.00 KM');
     expect(formatRange(1234.5)).toBe('1.23 KM');
+  });
+});
+
+// ------------------------------------------------------------------ Bergbau
+
+/** Ein Bergbauzustand von Hand — nur die Felder, die die Schirme lesen. */
+function miningStatus(overrides: Partial<MiningStatus> = {}): MiningStatus {
+  return {
+    phase: 'idle',
+    targetIndex: 3,
+    mineral: null,
+    scanned: false,
+    scanProgress: 0,
+    distance: 200,
+    beamRange: 600,
+    remainingTons: 40,
+    totalTons: 80,
+    sessionTons: 0,
+    batchProgress: 0,
+    rate: 0,
+    bonus: 1,
+    beamActive: false,
+    charge: 0,
+    hitPoint: new Vector3(),
+    hitNormal: new Vector3(0, 1, 0),
+    hasHit: true,
+    deliveries: 0,
+    sinceDelivery: Infinity,
+    message: 'BEREIT',
+    cargoUsed: 12,
+    cargoFree: 28,
+    cargoCapacity: 40,
+    ...overrides,
+  };
+}
+
+describe('mineralHeadline', () => {
+  it('meldet ohne Bergbausystem und ohne Ziel "FREI"', () => {
+    expect(mineralHeadline(null)).toBe('FREI');
+    expect(mineralHeadline(miningStatus({ targetIndex: -1 }))).toBe('FREI');
+  });
+
+  it('nennt einen ungescannten Brocken "UNBEKANNT"', () => {
+    expect(mineralHeadline(miningStatus())).toBe('UNBEKANNT');
+  });
+
+  it('nennt nach dem Scan das Mineral', () => {
+    expect(mineralHeadline(miningStatus({ mineral: 'platinum', scanned: true })))
+      .toBe('PLATINERZ');
+  });
+});
+
+describe('miningActivity', () => {
+  it('zeigt den laufenden Scan mit seinem Fortschritt', () => {
+    const a = miningActivity(miningStatus({ scanProgress: 0.5 }));
+    expect(a.text).toBe('SCAN 50%');
+    expect(a.fill).toBeCloseTo(0.5, 6);
+  });
+
+  it('zeigt bei liegendem Strahl die Rate und den Klumpenfortschritt', () => {
+    const a = miningActivity(miningStatus({ beamActive: true, rate: 0.29, batchProgress: 0.4 }));
+    expect(a.text).toContain('0.29 T/S');
+    expect(a.fill).toBeCloseTo(0.4, 6);
+  });
+
+  it('zeigt sonst die Meldung des Systems ohne Balken', () => {
+    const a = miningActivity(miningStatus({ message: 'LADERAUM VOLL' }));
+    expect(a.text).toBe('LADERAUM VOLL');
+    expect(a.fill).toBe(0);
   });
 });

@@ -16,6 +16,9 @@ import {
 } from 'three';
 import type { Object3D, PerspectiveCamera, Texture } from 'three';
 import type { HudState } from './HudState';
+import { MINERALS } from '../world/AsteroidTypes';
+import { formatTons } from '../cargo/CargoHold';
+import type { MiningStatus } from '../mining/MiningSystem';
 
 /**
  * Das Flug-HUD als echte Projektion vor der Kanzel.
@@ -271,6 +274,22 @@ function symbol(map: Texture, size: number, color: Color, opacity = 1): Mesh {
   return mesh;
 }
 
+/**
+ * Die Bergbauzeile unter der Zielklammer. Kurz halten: mehr als 16 Zeichen
+ * passen bei 20 px nicht auf die 256 Pixel breite Leinwand.
+ */
+export function miningLine(mining: MiningStatus | null): string {
+  if (!mining || mining.targetIndex < 0) return '';
+  if (mining.scanProgress > 0 && mining.scanProgress < 1) {
+    return `SCAN ${Math.round(mining.scanProgress * 100)}%`;
+  }
+  if (mining.beamActive && mining.mineral) {
+    return `${MINERALS[mining.mineral].code} +${formatTons(mining.sessionTons)} T`;
+  }
+  if (!mining.mineral) return 'UNBEKANNT';
+  return MINERALS[mining.mineral].name.toUpperCase();
+}
+
 // ------------------------------------------------------------------ Klasse
 
 const _eye = new Vector3();
@@ -337,13 +356,15 @@ export class GlassHud {
 
     this.labelCanvas = document.createElement('canvas');
     this.labelCanvas.width = 256;
-    this.labelCanvas.height = 64;
+    // Drei Zeilen: Entfernung, Zustand, Inhalt. Der Inhalt gehoert an das Ziel
+    // und nicht nur auf den Schirm — dorthin sieht der Pilot beim Foerdern.
+    this.labelCanvas.height = 96;
     const ctx = this.labelCanvas.getContext('2d');
     if (!ctx) throw new Error('2D-Context fuer die Zielschrift nicht verfuegbar');
     this.labelCtx = ctx;
     this.labelTexture = new CanvasTexture(this.labelCanvas);
     this.labelMesh = new Mesh(
-      new PlaneGeometry(0.30, 0.075),
+      new PlaneGeometry(0.30, 0.1125),
       symbolMaterial(this.labelTexture, TARGET_COLOR, 0.95),
     );
     this.labelMesh.renderOrder = 901;
@@ -490,7 +511,7 @@ export class GlassHud {
         corner.position.set(x, y, 0);
       });
       this.labelMesh.position.set(0, -edge - 0.06, 0);
-      this.updateLabel(target.distance, target.integrity);
+      this.updateLabel(target.distance, target.integrity, state.mining ?? null);
     }
 
     // Vorhalt nur, wenn er sichtbar neben dem Ziel liegt.
@@ -500,27 +521,36 @@ export class GlassHud {
     if (this.lead.visible) this.place(this.lead, _dir);
   }
 
-  /** Entfernung und Zustand unter der Klammer; nur bei Aenderung neu gemalt. */
-  private updateLabel(distance: number, integrity: number): void {
+  /**
+   * Entfernung, Zustand und Inhalt unter der Klammer; nur bei Aenderung neu
+   * gemalt. Die dritte Zeile ist der Bergbau: was drinsteckt, wie weit der
+   * Scan ist, wie viel dieser Brocken schon hergegeben hat.
+   */
+  private updateLabel(distance: number, integrity: number, mining: MiningStatus | null): void {
     const text = distance >= 1000
       ? `${(distance / 1000).toFixed(2)} KM`
       : `${Math.round(distance)} M`;
     const bars = Math.round(integrity * 10);
-    const line = `${text}  ${'|'.repeat(bars)}${'.'.repeat(10 - bars)}`;
+    const content = miningLine(mining);
+    const line = `${text}  ${bars}  ${content}`;
     if (line === this.lastLabel) return;
     this.lastLabel = line;
 
     const ctx = this.labelCtx;
-    ctx.clearRect(0, 0, 256, 64);
+    ctx.clearRect(0, 0, 256, 96);
     ctx.fillStyle = '#ffffff';
     ctx.shadowColor = 'rgba(255,255,255,0.8)';
     ctx.shadowBlur = 6;
     ctx.font = 'bold 30px ui-monospace, Menlo, monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(text, 128, 20);
+    ctx.fillText(text, 128, 18);
     ctx.font = 'bold 22px ui-monospace, Menlo, monospace';
     ctx.fillText(`${'|'.repeat(bars)}${'.'.repeat(10 - bars)}`, 128, 48);
+    if (content) {
+      ctx.font = 'bold 20px ui-monospace, Menlo, monospace';
+      ctx.fillText(content, 128, 78);
+    }
     this.labelTexture.needsUpdate = true;
   }
 }
