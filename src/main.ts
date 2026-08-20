@@ -135,7 +135,19 @@ const hud = new Hud();
 // Walk-Mode: der Spieler laeuft im Schiffslokalraum, die Kamera wechselt dabei
 // vom Sitzmarker ans Schiffs-Rig.
 const walk = new WalkController(input, ship);
-const player = new PlayerState({ input, ship, camera, seated, walk, hud });
+
+// --- Fracht ---
+// Gekaufte Ware liegt als echte Kiste im begehbaren Laderaum: voll beladen
+// quetscht man sich nach achtern durch, und das Schiff fliegt traeger. Der
+// Aufbau steht komplett in setupCargo(), hier haengt er nur ein.
+import { setupCargo } from './cargo/setupCargo';
+const cargo = setupCargo({ ship, walk, flight, renderer });
+// --- /Fracht ---
+
+const player = new PlayerState({
+  input, ship, camera, seated, walk, hud,
+  interactables: cargo.interactables,
+});
 
 // ------------------------------------------------------- Innenraum aus Blender
 // Die Innenraummaterialien sind stark metallisch und brauchen eine
@@ -318,6 +330,6 @@ Object.assign(window as unknown as Record<string, unknown>, {
   __privateer: {
     ship, flight, seated, walk, player, hud, camera, input, scene,
     weapons, effects, asteroids, targeting, hull, shake, radar,
-    post, renderer,
+    post, renderer, cargo,
   },
 });

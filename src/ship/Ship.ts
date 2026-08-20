@@ -16,6 +16,7 @@ export class Ship extends Object3D {
   private seat: Object3D;
   private stand: Object3D;
   private colliders: Mesh[] = [];
+  private readonly interiorListeners = new Set<(interior: Object3D) => void>();
 
   constructor(interior: Object3D = createPlaceholderInterior()) {
     super();
@@ -41,13 +42,40 @@ export class Ship extends Object3D {
     this.seat = seat;
     this.stand = stand;
 
+    this.refreshColliders();
+    for (const listener of this.interiorListeners) listener(interior);
+  }
+
+  /**
+   * `COL_`-Meshes neu einsammeln, **ohne** den Innenraum auszutauschen.
+   *
+   * Dafuer da, dass Einbauten zur Laufzeit erscheinen und verschwinden duerfen
+   * — Frachtkisten zum Beispiel. `setInterior()` waere dafuer das falsche
+   * Werkzeug: es haengt die Kamera vom Sitzmarker ab und setzt den Spieler auf
+   * den Aufstehpunkt zurueck. Wer hier ruft, muss danach
+   * `WalkController.rebuildCollision()` nachziehen.
+   */
+  refreshColliders(): void {
     this.colliders = [];
-    interior.traverse((obj) => {
+    this.interior.traverse((obj) => {
       if (obj instanceof Mesh && obj.name.startsWith(COLLIDER_PREFIX)) {
         obj.visible = false;
         this.colliders.push(obj);
       }
     });
+  }
+
+  /**
+   * Meldet sich fuer Innenraumwechsel an und wird **sofort** mit dem aktuellen
+   * Innenraum gerufen. Sonst muesste jeder Anmelder den Fall "GLB ist schon
+   * geladen" gesondert behandeln. Gibt die Abmeldefunktion zurueck.
+   */
+  onInteriorChange(listener: (interior: Object3D) => void): () => void {
+    this.interiorListeners.add(listener);
+    listener(this.interior);
+    return () => {
+      this.interiorListeners.delete(listener);
+    };
   }
 
   getInterior(): Object3D {

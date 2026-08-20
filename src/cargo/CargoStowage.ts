@@ -1,0 +1,200 @@
+import {
+  CONTAINER_HEIGHT,
+  GOODS,
+  UNIT_DEPTH,
+  UNIT_WIDTH,
+  unitCount,
+  type GoodId,
+} from './CargoGoods';
+
+/**
+ * Stauplan des Frachtraums: welche Stellplaetze belegt eine Ladung, wie hoch
+ * wird gestapelt, wo steht am Ende welches Gebinde.
+ *
+ * Reine Rechnung ohne Three.js — {@link CargoVisuals} setzt nur noch Meshes
+ * auf die hier berechneten Punkte. So laesst sich die Enge im Laderaum testen,
+ * ohne einen Browser zu starten.
+ *
+ * **Koordinaten:** GLB-Innenraumkoordinaten (Nase +Z, Boden y=0), also
+ * dieselbe Basis wie die Meshes im geladenen `ShipInterior`. Der Frachtraum
+ * liegt darin bei z -5,20 .. -1,20, x +-1,60, Decke 2,30. Achtung: das
+ * Schiffs-Rig ist dazu um 180 Grad um Y gedreht (siehe InteriorLoader) — wer
+ * Schiffslokalkoordinaten braucht, spiegelt x und z.
+ */
+
+export interface StowSlot {
+  readonly id: string;
+  /** Mittelpunkt der Grundflaeche. */
+  readonly x: number;
+  readonly z: number;
+  /** Nutzbare Stapelhoehe in Metern. */
+  readonly headroom: number;
+  /**
+   * Steht der Stellplatz im Gehweg? Diese Plaetze stehen hinten in der
+   * Fuellreihenfolge — erst bei voller Ladung wird der Gang zum Slalom.
+   */
+  readonly aisle: boolean;
+}
+
+/**
+ * Stellplaetze in **Fuellreihenfolge**.
+ *
+ * Zuerst die beiden Wandreihen und das Heck: dort stoert Ladung niemanden.
+ * Danach die Plaetze im Gang, versetzt links/rechts — jeder einzelne laesst
+ * noch knapp 0,65 m frei (Spielerkapsel: 0,60 m), zusammen ergeben sie einen
+ * Slalom. Genau das ist der Punkt: volle Ladung soll man beim Gehen merken.
+ *
+ * Ausgespart bleiben die Werkbank (x -1,60..-0,90, z -2,40..-1,30) und die
+ * Anschlagbreite der Spanten (x bis +-1,49).
+ */
+export const STOW_SLOTS: readonly StowSlot[] = [
+  { id: 'S0', x: 1.08, z: -4.76, headroom: 2.0, aisle: false },
+  { id: 'P0', x: -1.08, z: -4.76, headroom: 2.0, aisle: false },
+  // Heckmitte ist eine Sackgasse — dort darf hoch gestapelt werden.
+  { id: 'C0', x: 0.0, z: -4.76, headroom: 2.0, aisle: false },
+  { id: 'S1', x: 1.08, z: -3.9, headroom: 2.0, aisle: false },
+  { id: 'P1', x: -1.08, z: -3.9, headroom: 2.0, aisle: false },
+  { id: 'S2', x: 1.08, z: -3.04, headroom: 2.0, aisle: false },
+  // Vor der Koje und vor den Spindtueren bleibt es niedrig, sonst kommt man
+  // an Bett und Schrank gar nicht mehr heran.
+  { id: 'P2', x: -1.08, z: -3.04, headroom: 1.4, aisle: false },
+  { id: 'S3', x: 1.08, z: -2.18, headroom: 1.4, aisle: false },
+  // Der Gang, versetzt backbord/steuerbord/backbord.
+  { id: 'A0', x: -0.4, z: -3.9, headroom: 1.4, aisle: true },
+  { id: 'A1', x: 0.4, z: -3.04, headroom: 1.4, aisle: true },
+  { id: 'A2', x: -0.4, z: -2.18, headroom: 1.4, aisle: true },
+];
+
+/** Ein abgestelltes Gebinde. */
+export interface StowedUnit {
+  readonly good: GoodId;
+  readonly slot: string;
+  /** Lage im Stapel, 0 = unten. */
+  readonly level: number;
+  /** Mittelpunkt der Grundflaeche. */
+  readonly x: number;
+  readonly z: number;
+  /** Unterkante ueber dem Boden. */
+  readonly y: number;
+  /** Drehung um Y in rad (kleiner Versatz, damit nichts wie im Regal steht). */
+  readonly yaw: number;
+  readonly width: number;
+  readonly depth: number;
+  readonly height: number;
+}
+
+export interface StowagePlan {
+  readonly units: readonly StowedUnit[];
+  /** Gebinde, fuer die kein Stellplatz mehr da war. Sollte 0 bleiben. */
+  readonly overflow: number;
+  /** Belegte Stellplaetze. */
+  readonly slotsUsed: number;
+  /** Belegte Stellplaetze, die im Gehweg stehen. */
+  readonly aisleSlotsUsed: number;
+}
+
+/** Was der Stauplan als Eingabe braucht — passt auf `CargoHold.getManifest()`. */
+export interface StowageLot {
+  readonly good: GoodId;
+  readonly tons: number;
+}
+
+/** Streuung der Stellung, damit der Stapel nicht wie ein Regal wirkt. */
+const YAW_JITTER = 0.03;
+const POSITION_JITTER = 0.015;
+
+/**
+ * Deterministische Streuung: derselbe Stellplatz sieht nach jedem Umstauen
+ * gleich aus. Ein `Math.random()` liesse die Kisten bei jeder Manifest-
+ * aenderung neu zappeln.
+ */
+function jitter(seed: number): number {
+  const value = Math.sin(seed * 127.1) * 43758.5453;
+  return (value - Math.floor(value)) * 2 - 1;
+}
+
+/**
+ * Stauplan fuer ein Manifest.
+ *
+ * Jede Warenart beginnt auf einem **frischen** Stellplatz und stapelt sich
+ * dort so hoch, wie die Deckenfreiheit hergibt. Das kostet ein paar
+ * Zentimeter Platz, macht aber den Frachtraum lesbar: ein Stapel ist eine
+ * Ware, und wer wissen will, was er geladen hat, schaut hin statt ins Menue.
+ */
+export function planStowage(
+  lots: readonly StowageLot[],
+  slots: readonly StowSlot[] = STOW_SLOTS,
+): StowagePlan {
+  const units: StowedUnit[] = [];
+  const used = new Set<string>();
+  let overflow = 0;
+  let slotIndex = 0;
+  let fill = 0;
+  let level = 0;
+
+  for (const lot of lots) {
+    const good = GOODS[lot.good];
+    if (!good || lot.tons <= 0) continue;
+    const height = CONTAINER_HEIGHT[good.container];
+    const total = unitCount(good, lot.tons);
+
+    // Frischer Stellplatz je Warenart (siehe Kopfkommentar).
+    if (fill > 0) {
+      slotIndex++;
+      fill = 0;
+      level = 0;
+    }
+
+    for (let i = 0; i < total; i++) {
+      // Passt das Gebinde nicht mehr unter die Decke: naechster Stellplatz.
+      while (slotIndex < slots.length && fill + height > slots[slotIndex].headroom + 1e-6) {
+        slotIndex++;
+        fill = 0;
+        level = 0;
+      }
+      if (slotIndex >= slots.length) {
+        overflow += total - i;
+        break;
+      }
+
+      const slot = slots[slotIndex];
+      const seed = slotIndex * 17 + level * 3 + 1;
+      used.add(slot.id);
+      units.push({
+        good: lot.good,
+        slot: slot.id,
+        level,
+        x: slot.x + jitter(seed) * POSITION_JITTER,
+        z: slot.z + jitter(seed + 0.5) * POSITION_JITTER,
+        y: fill,
+        yaw: jitter(seed + 1.5) * YAW_JITTER,
+        width: UNIT_WIDTH,
+        depth: UNIT_DEPTH,
+        height,
+      });
+
+      fill += height;
+      level++;
+    }
+  }
+
+  let aisleSlotsUsed = 0;
+  for (const slot of slots) if (slot.aisle && used.has(slot.id)) aisleSlotsUsed++;
+
+  return { units, overflow, slotsUsed: used.size, aisleSlotsUsed };
+}
+
+/**
+ * Wie viele Gebinde dieser Ware insgesamt auf die Stellplaetze passen. Nur
+ * fuer Tests und Diagnose — die Kapazitaet des Laderaums haengt an der
+ * Tonnage, nicht hieran (siehe {@link CargoHold}).
+ */
+export function stowageCapacity(
+  good: GoodId,
+  slots: readonly StowSlot[] = STOW_SLOTS,
+): number {
+  const height = CONTAINER_HEIGHT[GOODS[good].container];
+  let count = 0;
+  for (const slot of slots) count += Math.floor(slot.headroom / height + 1e-6);
+  return count;
+}
