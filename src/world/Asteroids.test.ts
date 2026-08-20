@@ -573,3 +573,30 @@ describe('Asteroidenfeld — Oberflaeche fuer die Landung', () => {
     expect(sample.point.distanceTo(center)).not.toBeCloseTo(first, 6);
   });
 });
+
+describe('Asteroidenfeld — Detailstufen', () => {
+  it('zieht die Umschaltweiten nach, wenn ein Grossbrocken nachwaechst', () => {
+    const field = new Asteroids({ count: 200, seed: 31, respawnDelay: 1 });
+    let index = 0;
+    for (let i = 1; i < field.count; i++) {
+      if (field.getRadius(i) > field.getRadius(index)) index = i;
+    }
+    const center = field.getCenter(index, new Vector3());
+    let node: LOD | null = null;
+    field.updateMatrixWorld(true);
+    field.traverse((child) => {
+      if ((child as Partial<LOD>).isLOD && child.position.distanceTo(center) < 1e-3) {
+        node = child as LOD;
+      }
+    });
+    const lod = node as unknown as LOD;
+    expect(lod).toBeTruthy();
+    expect(lod.levels.length).toBeGreaterThan(1);
+
+    while (field.isAlive(index)) field.damage(index, 50);
+    field.update(1.5);
+    expect(field.isAlive(index)).toBe(true);
+    const last = lod.levels[lod.levels.length - 1]!;
+    expect(last.distance).toBeCloseTo(field.getRadius(index) * 8, 3);
+  });
+});

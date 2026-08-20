@@ -641,8 +641,28 @@ export class Asteroids extends Group implements AsteroidField {
     this.minerals[index] = pickMineral(this.rng());
     this.mined[index] = 0;
     this.generations[index] = this.generations[index]! + 1;
+    this.retuneLevels(index);
     this.writeAppearance(index);
     this.writeTransform(index);
+  }
+
+  /**
+   * Umschaltweiten der Detailstufen an den neuen Radius anpassen. Die Weiten
+   * sind Vielfache des Radius; nach dem Nachwachsen ist der ein anderer, und
+   * ein geschrumpfter Brocken zeigte sonst seine feinste Stufe noch aus
+   * kilometerweiter Entfernung.
+   */
+  private retuneLevels(index: number): void {
+    const node = this.nodes[index];
+    if (!node) return;
+    const radius = this.radii[index]!;
+    const levels = node.levels;
+    const last = levels.length - 1;
+    for (let l = 0; l < levels.length; l++) {
+      if (l === 0) levels[l]!.distance = 0;
+      else if (l === last) levels[l]!.distance = radius * LOD_SWITCH;
+      else levels[l]!.distance = radius * FINE_SWITCH;
+    }
   }
 
   // ------------------------------------------------------------ Abfragen
