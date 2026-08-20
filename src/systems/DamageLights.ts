@@ -24,6 +24,21 @@ const PAIR_RADIUS = 1.4;
 /** Faktor auf die rote Notbeleuchtung, wenn das Deckenlicht weg ist. */
 const EMERGENCY_BOOST = 3.2;
 
+/**
+ * Restlicher Anteil der Umgebungsreflexion bei komplett totem Licht.
+ *
+ * Die Reflexionsumgebung ist eine Aufnahme des *beleuchteten* Raums (siehe
+ * `InteriorEnvironment`) und traegt einen guten Teil der Grundhelligkeit. Ohne
+ * sie mitzudimmen bleibt der Frachtraum auch mit ausgeschalteten Lampen
+ * gemuetlich hell — die Lampe geht aus, der Raum aber nicht.
+ */
+const ENV_FLOOR = 0.3;
+
+interface Dimmable {
+  material: MeshStandardMaterial;
+  base: number;
+}
+
 interface Lamp {
   material: MeshStandardMaterial;
   baseEmissive: number;
@@ -40,6 +55,8 @@ export class DamageLights {
   /** Lampen ohne Leuchtflaeche (Akzentlicht an Werkbank, Koje, Konsole). */
   private readonly accents: Array<{ light: PointLight; base: number }> = [];
   private emergency: { material: MeshStandardMaterial; base: number } | null = null;
+  /** Alle Materialien mit Umgebungsreflexion (siehe {@link ENV_FLOOR}). */
+  private readonly reflective: Dimmable[] = [];
   private time = 0;
 
   constructor(private readonly random: () => number = Math.random) {}
@@ -48,6 +65,7 @@ export class DamageLights {
   attach(interior: Object3D): void {
     this.lamps.length = 0;
     this.accents.length = 0;
+    this.reflective.length = 0;
     this.emergency = null;
 
     const lights: PointLight[] = [];
@@ -57,13 +75,20 @@ export class DamageLights {
       }
     });
     const taken = new Set<PointLight>();
+    const seen = new Set<MeshStandardMaterial>();
 
     interior.traverse((object) => {
       if (!(object instanceof Mesh)) return;
 
       const material = firstStandardMaterial(object);
-      if (material && material.name === EMERGENCY_MATERIAL && !this.emergency) {
-        this.emergency = { material, base: material.emissiveIntensity };
+      if (material && !seen.has(material)) {
+        seen.add(material);
+        if (material.name === EMERGENCY_MATERIAL && !this.emergency) {
+          this.emergency = { material, base: material.emissiveIntensity };
+        }
+        if (material.envMapIntensity > 0) {
+          this.reflective.push({ material, base: material.envMapIntensity });
+        }
       }
       if (!DIFFUSER_PATTERN.test(object.name) || !material) return;
 
@@ -119,6 +144,9 @@ export class DamageLights {
     }
 
     for (const accent of this.accents) accent.light.intensity = accent.base * level;
+
+    const ambient = ENV_FLOOR + (1 - ENV_FLOOR) * level;
+    for (const entry of this.reflective) entry.material.envMapIntensity = entry.base * ambient;
 
     if (this.emergency) {
       this.emergency.material.emissiveIntensity =

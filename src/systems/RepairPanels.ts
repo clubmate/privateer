@@ -97,8 +97,8 @@ const STATUS_COLOR: Record<SystemStatus, number> = {
 /** Grundhelligkeit der Leiste je Status (heil leuchtet nur schwach mit). */
 const STATUS_EMISSIVE: Record<SystemStatus, number> = {
   ok: 0.25,
-  impaired: 1.5,
-  failed: 2.4,
+  impaired: 1.3,
+  failed: 1.9,
 };
 
 /** Pulsfrequenz der Leiste in Hz je Status. */
@@ -166,12 +166,14 @@ class Sparks {
 
     const geometry = new BufferGeometry();
     geometry.setAttribute('position', new BufferAttribute(this.positions, 3));
+    // Klein und warm: additiv gemischt und mit Bloom darueber wird aus jedem
+    // Punkt sonst ein weisses Quadrat statt eines Funkens.
     const material = new PointsMaterial({
-      color: 0xffb257,
-      size: 0.022,
+      color: 0xff7b23,
+      size: 0.009,
       sizeAttenuation: true,
       transparent: true,
-      opacity: 0.95,
+      opacity: 0.9,
       blending: AdditiveBlending,
       depthWrite: false,
     });
