@@ -1,0 +1,133 @@
+/* Frachtmanifest — gleiche Optik wie das Cockpit-HUD (siehe hud/hud.css),
+   aber eigene Datei: unter src/hud/ wird parallel gearbeitet. */
+
+.cargo {
+  --cargo-green: #5cffa8;
+  --cargo-green-dim: rgba(92, 255, 168, 0.45);
+  --cargo-cyan: #66eaff;
+  --cargo-cyan-dim: rgba(102, 234, 255, 0.5);
+  --cargo-warn: #ffb347;
+
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 11;
+  /* Der Zeiger ist beim Gehen gefangen — das Panel darf ihn nicht einfangen. */
+  pointer-events: none;
+  user-select: none;
+  min-width: 460px;
+  padding: 14px 18px 12px;
+  border: 1px solid var(--cargo-green-dim);
+  background: rgba(0, 18, 13, 0.82);
+  backdrop-filter: blur(3px);
+  font-family: ui-monospace, SFMono-Regular, Menlo, 'DejaVu Sans Mono', monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  letter-spacing: 0.06em;
+  color: var(--cargo-green);
+  text-shadow: 0 0 6px rgba(92, 255, 168, 0.55);
+}
+
+.cargo[hidden] {
+  display: none;
+}
+
+.cargo__title {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--cargo-green-dim);
+  color: var(--cargo-cyan);
+  font-size: 15px;
+  letter-spacing: 0.18em;
+}
+
+.cargo__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.cargo__table th {
+  padding: 0 0 4px;
+  color: var(--cargo-cyan-dim);
+  font-weight: normal;
+  text-align: right;
+  letter-spacing: 0.1em;
+}
+
+.cargo__table th:first-child,
+.cargo__table td:first-child {
+  text-align: left;
+}
+
+.cargo__table td {
+  padding: 2px 0;
+}
+
+.cargo__table td:not(:first-child) {
+  text-align: right;
+  padding-left: 22px;
+}
+
+/* Farbtupfer der Warenart — dieselbe Lackfarbe wie auf der Kiste im Laderaum. */
+.cargo__chip {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.6);
+  vertical-align: baseline;
+}
+
+.cargo__empty {
+  padding: 10px 0 6px;
+  color: var(--cargo-cyan-dim);
+}
+
+.cargo__totals {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--cargo-green-dim);
+}
+
+.cargo__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  white-space: nowrap;
+}
+
+.cargo__row span:first-child {
+  color: var(--cargo-cyan-dim);
+}
+
+.cargo__bar {
+  position: relative;
+  height: 6px;
+  margin: 8px 0 2px;
+  border: 1px solid var(--cargo-green-dim);
+}
+
+.cargo__bar i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  display: block;
+  background: var(--cargo-green);
+  opacity: 0.55;
+}
+
+.cargo__bar.is-full i {
+  background: var(--cargo-warn);
+  opacity: 0.8;
+}
+
+.cargo__hint {
+  margin-top: 10px;
+  color: var(--cargo-cyan-dim);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+}
