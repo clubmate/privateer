@@ -9,6 +9,17 @@ import {
   Vector3,
 } from 'three';
 import { makeRng, noise3 } from './noise';
+import {
+  MINERALS,
+  MINERAL_IDS,
+  SIZE_CLASSES,
+  SIZE_IDS,
+  yieldTons,
+  type AsteroidField,
+  type AsteroidSize,
+  type MineralId,
+  type SurfaceSample,
+} from './AsteroidTypes';
 
 export interface AsteroidOptions {
   count: number;
@@ -96,7 +107,36 @@ function chunkGeometry(seed: number): IcosahedronGeometry {
  * Asteroidenfeld als InstancedMesh rund um die Startposition.
  * Fuer Floating Origin einfach `field.position` mitverschieben.
  */
-export class Asteroids extends InstancedMesh<IcosahedronGeometry, MeshStandardMaterial> {
+/** Groessenklasse zu einem Umriss-Radius. */
+function sizeClassFor(radius: number): AsteroidSize {
+  for (const id of SIZE_IDS) {
+    if (radius <= SIZE_CLASSES[id].maxRadius) return id;
+  }
+  return 'huge';
+}
+
+/** Mineral nach Haeufigkeit ziehen. */
+function pickMineral(roll: number): MineralId {
+  let total = 0;
+  for (const id of MINERAL_IDS) total += MINERALS[id].frequency;
+  let cursor = roll * total;
+  for (const id of MINERAL_IDS) {
+    cursor -= MINERALS[id].frequency;
+    if (cursor <= 0) return id;
+  }
+  return 'rock';
+}
+
+export class Asteroids
+  extends InstancedMesh<IcosahedronGeometry, MeshStandardMaterial>
+  implements AsteroidField
+{
+  /** Inhalt je Brocken. */
+  private readonly minerals: MineralId[] = [];
+  /** Bereits gefoerderte Tonnen je Brocken. */
+  private readonly mined: number[] = [];
+  /** Zaehlt hoch, sobald ein Platz neu gesetzt wird (siehe AsteroidField). */
+  private readonly generations: number[] = [];
   private readonly positions: Vector3[] = [];
   private readonly rotations: Quaternion[] = [];
   private readonly axes: Vector3[] = [];
@@ -161,6 +201,10 @@ export class Asteroids extends InstancedMesh<IcosahedronGeometry, MeshStandardMa
       const warm = rng() * 0.12;
       color.setRGB(shade * (1 + warm), shade * (1 + warm * 0.5), shade * (1 - warm * 0.35));
       this.setColorAt(i, color);
+
+      this.minerals.push(pickMineral(rng()));
+      this.mined.push(0);
+      this.generations.push(0);
 
       const hp = hitpointsFor(this.scales[i]!);
       this.hitpoints.push(hp);
@@ -313,6 +357,11 @@ export class Asteroids extends InstancedMesh<IcosahedronGeometry, MeshStandardMa
     this.hitpoints[index] = hitpointsFor(this.scales[index]!);
     this.maxHitpoints[index] = this.hitpoints[index]!;
     this.respawn[index] = 0;
+    // Neuer Brocken, neuer Inhalt — und ein Zaehler hoch, damit ein alter
+    // Scan nicht faelschlich weitergilt.
+    this.minerals[index] = pickMineral(rng());
+    this.mined[index] = 0;
+    this.generations[index] = this.generations[index]! + 1;
     this.velocities[index]!
       .set(rng() * 2 - 1, (rng() * 2 - 1) * 0.4, rng() * 2 - 1)
       .normalize()
@@ -323,6 +372,56 @@ export class Asteroids extends InstancedMesh<IcosahedronGeometry, MeshStandardMa
     this.color.setRGB(shade * (1 + warm), shade * (1 + warm * 0.5), shade * (1 - warm * 0.35));
     this.setColorAt(index, this.color);
     if (this.instanceColor) this.instanceColor.needsUpdate = true;
+  }
+
+  // ------------------------------------------------------ AsteroidField
+
+  getMineral(index: number): MineralId {
+    return this.minerals[index] ?? 'rock';
+  }
+
+  getSizeClass(index: number): AsteroidSize {
+    return sizeClassFor(this.getRadius(index));
+  }
+
+  isLandable(index: number): boolean {
+    return SIZE_CLASSES[this.getSizeClass(index)].landable;
+  }
+
+  getGeneration(index: number): number {
+    return this.generations[index] ?? 0;
+  }
+
+  getTotalTons(index: number): number {
+    return yieldTons(this.getRadius(index), this.getMineral(index));
+  }
+
+  getRemainingTons(index: number): number {
+    if (!this.isAlive(index)) return 0;
+    return Math.max(this.getTotalTons(index) - (this.mined[index] ?? 0), 0);
+  }
+
+  mine(index: number, tons: number): number {
+    const available = this.getRemainingTons(index);
+    const taken = Math.min(Math.max(tons, 0), available);
+    this.mined[index] = (this.mined[index] ?? 0) + taken;
+    return taken;
+  }
+
+  /**
+   * Vorlaeufig als Kugeltest: der Umriss ist rund, also liegt der Punkt auf
+   * der Verbindungslinie. Sobald die Brocken echte unregelmaessige Geometrie
+   * haben, tastet diese Stelle die Oberflaeche ab.
+   */
+  sampleSurface(index: number, from: Vector3, out: SurfaceSample): boolean {
+    if (!this.isAlive(index)) return false;
+    this.getCenter(index, this.tmpVec);
+    out.normal.copy(from).sub(this.tmpVec);
+    const distance = out.normal.length();
+    if (distance < 1e-4) return false;
+    out.normal.divideScalar(distance);
+    out.point.copy(this.tmpVec).addScaledVector(out.normal, this.getRadius(index));
+    return true;
   }
 
   private writeMatrices(): void {

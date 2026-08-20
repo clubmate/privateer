@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Vector3 } from 'three';
 import { Asteroids } from './Asteroids';
+import { MINERAL_IDS, SIZE_CLASSES, yieldTons } from './AsteroidTypes';
 
 /** Kleines, schnell simulierbares Feld mit festem Seed. */
 function field(overrides = {}): Asteroids {
@@ -168,5 +169,86 @@ describe('Asteroids — Zerstoerung und Nachwuchs', () => {
     asteroids.getCenter(index, center);
     expect(center.length()).toBeGreaterThanOrEqual(100);
     expect(center.length()).toBeLessThanOrEqual(600);
+  });
+});
+
+describe('Asteroidenfeld als Bergbaurevier', () => {
+  it('gibt jedem Brocken genau ein Mineral', () => {
+    const field = new Asteroids({ count: 60, seed: 7 });
+    for (let i = 0; i < field.count; i++) {
+      expect(MINERAL_IDS).toContain(field.getMineral(i));
+    }
+  });
+
+  it('zieht die Mineralien nach Haeufigkeit — taubes Gestein ueberwiegt', () => {
+    const field = new Asteroids({ count: 400, seed: 11 });
+    const tally: Record<string, number> = {};
+    for (let i = 0; i < field.count; i++) {
+      const id = field.getMineral(i);
+      tally[id] = (tally[id] ?? 0) + 1;
+    }
+    expect(tally['rock'] ?? 0).toBeGreaterThan(tally['crystal'] ?? 0);
+    expect(tally['iron'] ?? 0).toBeGreaterThan(tally['platinum'] ?? 0);
+  });
+
+  it('leitet den Vorrat aus Volumen und Ergiebigkeit ab', () => {
+    const field = new Asteroids({ count: 20, seed: 3 });
+    for (let i = 0; i < field.count; i++) {
+      expect(field.getTotalTons(i)).toBeCloseTo(
+        yieldTons(field.getRadius(i), field.getMineral(i)),
+      );
+      expect(field.getRemainingTons(i)).toBeCloseTo(field.getTotalTons(i));
+    }
+  });
+
+  it('foerdert hoechstens den Vorrat und zaehlt ihn herunter', () => {
+    const field = new Asteroids({ count: 5, seed: 5 });
+    const total = field.getTotalTons(0);
+    expect(field.mine(0, total * 0.25)).toBeCloseTo(total * 0.25);
+    expect(field.getRemainingTons(0)).toBeCloseTo(total * 0.75);
+
+    // Mehr als da ist, gibt es nicht.
+    expect(field.mine(0, total * 10)).toBeCloseTo(total * 0.75);
+    expect(field.getRemainingTons(0)).toBe(0);
+    expect(field.mine(0, 5)).toBe(0);
+  });
+
+  it('gibt aus einem zerstoerten Brocken nichts mehr her', () => {
+    const field = new Asteroids({ count: 5, seed: 9 });
+    while (field.isAlive(0)) field.damage(0, 1);
+    expect(field.getRemainingTons(0)).toBe(0);
+  });
+
+  it('zaehlt die Generation hoch, wenn ein Platz neu gesetzt wird', () => {
+    const field = new Asteroids({ count: 5, seed: 13, respawnDelay: 1 });
+    const before = field.getGeneration(0);
+    while (field.isAlive(0)) field.damage(0, 1);
+    field.update(1.5);
+    expect(field.getGeneration(0)).toBe(before + 1);
+    expect(field.isAlive(0)).toBe(true);
+    // Der Vorrat des neuen Brockens ist unberuehrt.
+    expect(field.getRemainingTons(0)).toBeCloseTo(field.getTotalTons(0));
+  });
+
+  it('tastet die Oberflaeche zwischen Beobachter und Mittelpunkt ab', () => {
+    const field = new Asteroids({ count: 5, seed: 17 });
+    const center = field.getCenter(0, new Vector3());
+    const from = center.clone().add(new Vector3(0, 0, 5000));
+    const sample = { point: new Vector3(), normal: new Vector3() };
+
+    expect(field.sampleSurface(0, from, sample)).toBe(true);
+    expect(sample.normal.z).toBeCloseTo(1);
+    expect(sample.point.distanceTo(center)).toBeCloseTo(field.getRadius(0));
+    // Der Punkt liegt zwischen Beobachter und Mittelpunkt.
+    expect(sample.point.distanceTo(from)).toBeLessThan(from.distanceTo(center));
+  });
+
+  it('nennt nur die groessten Brocken landbar', () => {
+    const field = new Asteroids({ count: 40, seed: 21 });
+    for (let i = 0; i < field.count; i++) {
+      const landable = field.isLandable(i);
+      expect(landable).toBe(SIZE_CLASSES[field.getSizeClass(i)].landable);
+      if (landable) expect(field.getRadius(i)).toBeGreaterThan(150);
+    }
   });
 });
