@@ -1,4 +1,7 @@
-/* Retro-Cockpit-HUD: Gruen/Cyan auf Schwarz, monospace, wie Privateer. */
+/*
+ * Rest-HUD im DOM: Prompts, Systemmeldungen, Schadensblitz und die
+ * abschaltbare Hilfsanzeige (H). Alles Fliegerische steht im Cockpit selbst.
+ */
 
 .hud {
   --hud-green: #5cffa8;
@@ -22,82 +25,22 @@
   text-shadow: var(--hud-glow);
 }
 
-/* ------------------------------------------------------------ Zentrum */
+/* ------------------------------------------------------- Hilfsanzeige (H) */
 
-.hud__center {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  transition: color 90ms linear, transform 90ms ease-out;
-}
-
-/* Treffer: Fadenkreuz blitzt kurz warm auf und zuckt minimal. */
-.hud__center.is-hit {
-  color: var(--hud-warn);
-  transform: translate(-50%, -50%) scale(1.18);
-  text-shadow: 0 0 10px rgba(255, 179, 71, 0.8);
-}
-
-.hud__ring {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  border: 1px dashed var(--hud-green-dim);
-  border-radius: 50%;
-  opacity: 0.25;
-  transform: translate(-50%, -50%);
-}
-
-.hud__cursor {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 26px;
-  height: 26px;
-  margin: -13px 0 0 -13px;
-  color: var(--hud-cyan);
-  will-change: transform;
-}
-
-.hud__marker {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 34px;
-  height: 34px;
-  margin: -17px 0 0 -17px;
-  will-change: transform;
-}
-
-.hud__marker--retro {
-  opacity: 0.7;
-}
-
-.hud__marker.is-clamped {
-  opacity: 0.55;
-}
-
-.hud__marker[hidden],
-.hud__cursor[hidden] {
+.hud__helper[hidden] {
   display: none;
 }
 
-/* ------------------------------------------------------------- Panels */
-
 .hud__panel {
   position: absolute;
+  left: 22px;
+  bottom: 22px;
+  min-width: 232px;
   padding: 8px 12px;
   border: 1px solid var(--hud-green-dim);
   /* Deckend genug, damit die Werte auch ueber der hellen Konsole lesbar sind. */
   background: rgba(0, 18, 13, 0.72);
   backdrop-filter: blur(2px);
-}
-
-.hud__panel--flight {
-  left: 22px;
-  bottom: 22px;
-  min-width: 210px;
 }
 
 .hud__row {
@@ -119,6 +62,10 @@
 .hud__value--big {
   font-size: 20px;
   line-height: 1.2;
+}
+
+.hud__value.is-warn {
+  color: var(--hud-warn);
 }
 
 .hud__bar {
@@ -147,8 +94,6 @@
   background: var(--hud-green);
   box-shadow: var(--hud-glow);
 }
-
-/* --------------------------------------------------------- Statuszeile */
 
 .hud__status {
   position: absolute;
@@ -234,8 +179,6 @@
 
 /* ------------------------------------------------------------- Gehmodus */
 
-/* Beim Gehen bleiben nur Speed-Panel, Status und Prompt stehen — Fadenkreuz,
-   Steuerkreuz und Bahnmarker gehoeren zum Flug. */
 .hud__keys--walk,
 .hud--walking .hud__keys--flight {
   display: none;
@@ -245,83 +188,9 @@
   display: block;
 }
 
-.hud--walking .hud__center,
-.hud--walking .hud__ring,
-.hud--walking .hud__cursor,
-.hud--walking .hud__marker {
-  display: none;
-}
-
 .hud--walking .hud__prompt {
   color: var(--hud-green);
   border-color: var(--hud-green-dim);
-}
-
-/* ------------------------------------------------------- Ziel und Vorhalt */
-
-.hud__target,
-.hud__lead {
-  position: absolute;
-  left: 0;
-  top: 0;
-  margin-left: -0.5px;
-  margin-top: -0.5px;
-  color: var(--hud-warn);
-  will-change: transform;
-}
-
-.hud__lead {
-  transform-origin: center;
-  margin-left: -15px;
-  margin-top: -15px;
-  opacity: 0.9;
-}
-
-/* Klammer: vier Ecken, kein geschlossener Rahmen — verdeckt weniger. */
-.hud__target-box {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  border: 1px solid currentColor;
-  border-radius: 2px;
-  opacity: 0.85;
-  clip-path: polygon(
-    0 0, 30% 0, 30% 6%, 6% 6%, 6% 30%, 0 30%,
-    0 70%, 6% 70%, 6% 94%, 30% 94%, 30% 100%, 0 100%,
-    100% 100%, 70% 100%, 70% 94%, 94% 94%, 94% 70%, 100% 70%,
-    100% 30%, 94% 30%, 94% 6%, 70% 6%, 70% 0, 100% 0
-  );
-}
-
-.hud__target.is-clamped .hud__target-box {
-  opacity: 0.4;
-}
-
-.hud__target-info {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, 26px);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.hud__target-bar {
-  display: inline-block;
-  width: 42px;
-  height: 4px;
-  border: 1px solid currentColor;
-  opacity: 0.9;
-}
-
-.hud__target-bar > i {
-  display: block;
-  height: 100%;
-  background: currentColor;
 }
 
 /* ------------------------------------------------------------- Schaden */
@@ -336,14 +205,4 @@
     rgba(255, 40, 40, 0) 45%,
     rgba(255, 40, 40, 0.42) 100%
   );
-}
-
-.hud__value.is-warn {
-  color: var(--hud-warn);
-}
-
-/* Beim Gehen bleiben Zielklammer und Vorhalt aus. */
-.hud--walking .hud__target,
-.hud--walking .hud__lead {
-  display: none;
 }

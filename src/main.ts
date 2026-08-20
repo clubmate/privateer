@@ -21,12 +21,17 @@ import { SeatedController } from './player/SeatedController';
 import { WalkController } from './player/WalkController';
 import { PlayerState } from './player/PlayerState';
 import { Hud } from './hud/Hud';
+import type { HudState } from './hud/HudState';
 import { Effects } from './combat/Effects';
 import { Weapons } from './combat/Weapons';
 import { Targeting } from './combat/Targeting';
 import { HullCollision } from './combat/HullCollision';
 import { CameraShake } from './player/CameraShake';
 import { RadarScreen } from './ship/RadarScreen';
+// --- Cockpitanzeigen ---
+import { CockpitDisplays } from './ship/CockpitDisplays';
+import { GlassHud } from './hud/GlassHud';
+// --- Cockpitanzeigen Ende ---
 import { createPostprocessing, DEEP_LAYER, WORLD_LAYER } from './render/Postprocessing';
 
 const container = document.getElementById('app');
@@ -100,6 +105,13 @@ const targeting = new Targeting();
 const hull = new HullCollision(asteroids, effects);
 const shake = new CameraShake();
 const radar = new RadarScreen();
+// --- Cockpitanzeigen ---
+// Instrumente im Raum: lebende Schirme auf der Konsole und die Projektion
+// vor der Kanzel. Beide haengen am Schiff, nicht am Bild.
+const displays = new CockpitDisplays();
+const glass = new GlassHud();
+ship.add(glass.group);
+// --- Cockpitanzeigen Ende ---
 
 scene.add(starfield, sun, planet, asteroids, ship, weapons.mesh, effects);
 
@@ -151,6 +163,9 @@ loadShipInterior(`${import.meta.env.BASE_URL}models/ship-interior.glb`, interior
     ship.setInterior(interior);
     // Das MFD zeigt ab jetzt echte Kontakte statt eines gemalten Standbilds.
     radar.attachTo(interior);
+    // --- Cockpitanzeigen ---
+    displays.attachTo(interior);
+    // --- Cockpitanzeigen Ende ---
     // Kamera haengt noch am alten Sitzmarker und muss neu angebunden werden;
     // ausserdem brauchen die Kollisionsboxen die neuen COL_-Meshes.
     player.refreshInterior();
@@ -254,26 +269,36 @@ function render(dt: number): void {
   starfield.update(cameraWorldPos);
   sun.update(cameraWorldPos);
 
-  post.render();
-  if (pendingCapture) captureReflections();
-
-  hud.update({
+  // --- Cockpitanzeigen ---
+  // Ein Zustand je Frame fuer alle drei Anzeigen: Schirme, Scheibe, DOM.
+  const hudState: HudState = {
     camera,
+    position: ship.position,
+    orientation: ship.quaternion,
     velocity: flight.velocity,
     speed: flight.getSpeed(),
     setSpeed: flight.setSpeed,
+    maxSetSpeed: flight.getParams().maxSetSpeed,
     mode: flight.mode,
     fullStop: flight.fullStop,
     afterburner: flight.inputs.afterburner,
+    walking: player.isWalking,
     pointerLocked: input.pointerLocked,
     mouseOffset: seated.getMouseOffset(),
-    maxSetSpeed: flight.getParams().maxSetSpeed,
     kills: weapons.kills,
     sinceHit: weapons.getTimeSinceHit(),
     target,
     hull: hull.integrity,
     sinceImpact: hull.sinceImpact,
-  });
+  };
+  displays.update(dt, hudState);
+  glass.update(hudState);
+  // --- Cockpitanzeigen Ende ---
+
+  post.render();
+  if (pendingCapture) captureReflections();
+
+  hud.update(hudState);
 }
 
 renderer.setAnimationLoop(() => {
@@ -318,6 +343,6 @@ Object.assign(window as unknown as Record<string, unknown>, {
   __privateer: {
     ship, flight, seated, walk, player, hud, camera, input, scene,
     weapons, effects, asteroids, targeting, hull, shake, radar,
-    post, renderer,
+    post, renderer, displays, glass,
   },
 });
