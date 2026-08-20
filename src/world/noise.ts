@@ -61,6 +61,45 @@ export function fbm3(x: number, y: number, z: number, octaves = 4, gain = 0.5, l
   return sum / norm;
 }
 
+/**
+ * Gratrauschen: das Grundrauschen an seiner Mitte gefaltet. Wo `noise3` durch
+ * 0,5 laeuft, steht hier ein scharfer Ruecken — genau das, was einen Felsgrat
+ * von einer Beule unterscheidet.
+ */
+export function ridge3(x: number, y: number, z: number): number {
+  return 1 - Math.abs(noise3(x, y, z) * 2 - 1);
+}
+
+/**
+ * Fraktales Gratrauschen. Die Oktaven werden mit der bisherigen Amplitude
+ * gewichtet, damit sich Grate verzweigen statt sich zu ueberlagern; das ergibt
+ * das aderige Gekritzel, das man auf Bruchkanten sieht.
+ */
+export function ridgedFbm3(
+  x: number,
+  y: number,
+  z: number,
+  octaves = 4,
+  gain = 0.5,
+  lacunarity = 2.13,
+): number {
+  let sum = 0;
+  let amp = 1;
+  let norm = 0;
+  let fx = x;
+  let fy = y;
+  let fz = z;
+  for (let o = 0; o < octaves; o++) {
+    sum += ridge3(fx, fy, fz) * amp;
+    norm += amp;
+    amp *= gain;
+    fx *= lacunarity;
+    fy *= lacunarity;
+    fz *= lacunarity;
+  }
+  return sum / norm;
+}
+
 /** Deterministischer Pseudo-Zufall (mulberry32). */
 export function makeRng(seed: number): () => number {
   let a = seed >>> 0;

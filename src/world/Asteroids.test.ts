@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { Quaternion, Vector3 } from 'three';
+import { PerspectiveCamera, Quaternion, Raycaster, Vector3 } from 'three';
+import type { LOD, Mesh } from 'three';
 import { Asteroids } from './Asteroids';
 import { MINERAL_IDS, SIZE_CLASSES, yieldTons } from './AsteroidTypes';
+import { ARCHETYPES, buildRockGeometry, RockShape } from './AsteroidShapes';
 
 /** Kleines, schnell simulierbares Feld mit festem Seed. */
 function field(overrides = {}): Asteroids {
@@ -230,16 +232,13 @@ describe('Asteroidenfeld als Bergbaurevier', () => {
     expect(field.getRemainingTons(0)).toBeCloseTo(field.getTotalTons(0));
   });
 
-  it('meldet die Eigendrehung, damit ein Schiff darauf stehen bleiben kann', () => {
-    const f = new Asteroids({ count: 4, seed: 23 });
-    const before = f.getOrientation(0, new Quaternion());
-    f.update(2);
-    const after = f.getOrientation(0, new Quaternion());
-    // Die Brocken drehen sich langsam; nach zwei Sekunden ist das messbar.
-    expect(before.angleTo(after)).toBeGreaterThan(0);
-    expect(after.length()).toBeCloseTo(1);
-  });
-
+  /**
+   * Frueher stand hier `normal.z ≈ 1` und `Abstand === getRadius` — beides
+   * galt nur, solange jeder Brocken eine Kugel war. Mit echter Form liegt der
+   * Punkt irgendwo zwischen kleinstem und groesstem Radius, und die Normale
+   * ist die Neigung der Flaeche, nicht die Blickrichtung. Genau darauf baut
+   * die Landung auf, also wird jetzt das geprueft.
+   */
   it('tastet die Oberflaeche zwischen Beobachter und Mittelpunkt ab', () => {
     const field = new Asteroids({ count: 5, seed: 17 });
     const center = field.getCenter(0, new Vector3());
@@ -247,8 +246,15 @@ describe('Asteroidenfeld als Bergbaurevier', () => {
     const sample = { point: new Vector3(), normal: new Vector3() };
 
     expect(field.sampleSurface(0, from, sample)).toBe(true);
-    expect(sample.normal.z).toBeCloseTo(1);
-    expect(sample.point.distanceTo(center)).toBeCloseTo(field.getRadius(0));
+    // Punkt liegt auf der Sichtlinie, innerhalb des Umrisses und nicht im Kern.
+    const radius = sample.point.distanceTo(center);
+    expect(radius).toBeLessThanOrEqual(field.getRadius(0) + 1e-6);
+    expect(radius).toBeGreaterThan(field.getRadius(0) * 0.25);
+    expect(sample.point.x).toBeCloseTo(center.x, 6);
+    expect(sample.point.y).toBeCloseTo(center.y, 6);
+    // Die Normale zeigt nach aussen, aber nicht zwingend genau zum Beobachter.
+    expect(sample.normal.length()).toBeCloseTo(1);
+    expect(sample.normal.z).toBeGreaterThan(0.3);
     // Der Punkt liegt zwischen Beobachter und Mittelpunkt.
     expect(sample.point.distanceTo(from)).toBeLessThan(from.distanceTo(center));
   });
@@ -260,5 +266,337 @@ describe('Asteroidenfeld als Bergbaurevier', () => {
       expect(landable).toBe(SIZE_CLASSES[field.getSizeClass(i)].landable);
       if (landable) expect(field.getRadius(i)).toBeGreaterThan(150);
     }
+  });
+});
+
+describe('Asteroiden — Formen', () => {
+  /** Richtungen gleichmaessig ueber die Kugel abtasten. */
+  function directions(n: number): Vector3[] {
+    const out: Vector3[] = [];
+    const golden = Math.PI * (3 - Math.sqrt(5));
+    for (let i = 0; i < n; i++) {
+      const y = 1 - (i / (n - 1)) * 2;
+      const r = Math.sqrt(Math.max(0, 1 - y * y));
+      const a = golden * i;
+      out.push(new Vector3(Math.cos(a) * r, y, Math.sin(a) * r));
+    }
+    return out;
+  }
+
+  it('bleibt innerhalb des Umrissradius', () => {
+    for (const id of ARCHETYPES) {
+      const shape = new RockShape(id, 42);
+      for (const d of directions(400)) {
+        expect(shape.radius(d.x, d.y, d.z)).toBeLessThanOrEqual(1);
+        expect(shape.radius(d.x, d.y, d.z)).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('macht aus keinem Archetyp eine Kugel', () => {
+    for (const id of ARCHETYPES) {
+      const shape = new RockShape(id, 7);
+      let min = Infinity;
+      let max = 0;
+      for (const d of directions(600)) {
+        const r = shape.radius(d.x, d.y, d.z);
+        min = Math.min(min, r);
+        max = Math.max(max, r);
+      }
+      // Eine Kugel haette 1. Alles ueber 0,85 sieht aus wie eine Kartoffel.
+      expect(min / max).toBeLessThan(0.85);
+    }
+    // Und der Splitter ist deutlich langgestreckt.
+    const splinter = new RockShape('splinter', 7);
+    let min = Infinity;
+    for (const d of directions(600)) min = Math.min(min, splinter.radius(d.x, d.y, d.z));
+    expect(min).toBeLessThan(0.5);
+  });
+
+  it('baut Geometrie, deren Dreiecke nach aussen zeigen', () => {
+    const geometry = buildRockGeometry(new RockShape('cratered', 5), 2);
+    const position = geometry.attributes['position']!;
+    const index = geometry.index;
+    const a = new Vector3();
+    const b = new Vector3();
+    const c = new Vector3();
+    const faces = index ? index.count / 3 : position.count / 3;
+    for (let f = 0; f < faces; f++) {
+      const i0 = index ? index.getX(f * 3) : f * 3;
+      const i1 = index ? index.getX(f * 3 + 1) : f * 3 + 1;
+      const i2 = index ? index.getX(f * 3 + 2) : f * 3 + 2;
+      a.fromBufferAttribute(position, i0);
+      b.fromBufferAttribute(position, i1);
+      c.fromBufferAttribute(position, i2);
+      const normal = b.clone().sub(a).cross(c.clone().sub(a));
+      const centroid = a.clone().add(b).add(c).divideScalar(3);
+      expect(normal.dot(centroid)).toBeGreaterThan(0);
+    }
+    // Mulden und Fleckigkeit liegen als Attribut bereit (die Adern rechnet
+    // der Shader je Bildpunkt).
+    const detail = geometry.attributes['aRockDetail']!;
+    expect(detail.itemSize).toBe(2);
+    expect(detail.count).toBe(position.count);
+  });
+
+  it('schattiert frische Bruchkanten flach und Rundlinge glatt', () => {
+    expect(new RockShape('shard', 1).sharp).toBe(true);
+    expect(new RockShape('cratered', 1).sharp).toBe(false);
+    // Flach heisst: keine geteilten Vertices, also kein Index.
+    expect(buildRockGeometry(new RockShape('shard', 1), 1).index).toBeNull();
+    expect(buildRockGeometry(new RockShape('cratered', 1), 1).index).not.toBeNull();
+  });
+});
+
+describe('Asteroidenfeld — Groessen und Plaetze', () => {
+  it('haelt sich an die Groessenklassen', () => {
+    const field = new Asteroids({ count: 300, seed: 5 });
+    const seen = new Set<string>();
+    for (let i = 0; i < field.count; i++) {
+      const cls = SIZE_CLASSES[field.getSizeClass(i)];
+      seen.add(cls.id);
+      expect(field.getRadius(i)).toBeGreaterThanOrEqual(cls.minRadius);
+      expect(field.getRadius(i)).toBeLessThanOrEqual(cls.maxRadius);
+    }
+    // Vom Geroell bis zum Planetoiden ist alles vertreten.
+    expect(seen.size).toBe(5);
+  });
+
+  it('setzt Grossbrocken so, dass sie einander nicht durchdringen', () => {
+    const field = new Asteroids({ count: 300, seed: 5 });
+    const a = new Vector3();
+    const b = new Vector3();
+    const big: number[] = [];
+    for (let i = 0; i < field.count; i++) if (field.getRadius(i) >= 60) big.push(i);
+    expect(big.length).toBeGreaterThan(3);
+
+    for (const i of big) {
+      field.getCenter(i, a);
+      // Und keiner verschluckt den Startpunkt des Schiffes.
+      expect(a.length()).toBeGreaterThan(field.getRadius(i) * 1.5);
+      for (const j of big) {
+        if (j <= i) continue;
+        field.getCenter(j, b);
+        expect(a.distanceTo(b)).toBeGreaterThan(field.getRadius(i) + field.getRadius(j));
+      }
+    }
+  });
+
+  it('legt jeden Brocken in die uebergebene Renderschicht — auch die Detailstufen', () => {
+    const field = new Asteroids({ count: 60, seed: 8 });
+    field.setLayer(1);
+    let meshes = 0;
+    let planetoids = 0;
+    field.traverse((child) => {
+      expect(child.layers.mask).toBe(1 << 1);
+      if ((child as { isInstancedMesh?: boolean }).isInstancedMesh) meshes++;
+      if ((child as { isLOD?: boolean }).isLOD) planetoids++;
+    });
+    expect(meshes).toBeGreaterThan(1);
+    // Grossbrocken haengen als eigener Knoten mit zwei Detailstufen im Feld.
+    expect(planetoids).toBeGreaterThan(0);
+  });
+});
+
+describe('Asteroidenfeld — Treffer auf echter Geometrie', () => {
+  /** Ein moeglichst grosser Brocken des Feldes. */
+  function biggest(field: Asteroids): number {
+    let best = 0;
+    for (let i = 1; i < field.count; i++) {
+      if (field.getRadius(i) > field.getRadius(best)) best = i;
+    }
+    return best;
+  }
+
+  it('trifft genau dort, wo sampleSurface die Oberflaeche meldet', () => {
+    const field = new Asteroids({ count: 120, seed: 31 });
+    const index = biggest(field);
+    const center = field.getCenter(index, new Vector3());
+    const sample = { point: new Vector3(), normal: new Vector3() };
+
+    for (const offset of [new Vector3(0, 0, 1), new Vector3(0.6, 0.5, -0.6), new Vector3(-1, 0.2, 0.3)]) {
+      const from = center.clone().addScaledVector(offset.normalize(), 3000);
+      expect(field.sampleSurface(index, from, sample)).toBe(true);
+      const direction = center.clone().sub(from).normalize();
+      const hit = field.hitSegment(from, direction, 4000);
+      expect(hit).not.toBeNull();
+      expect(hit!.index).toBe(index);
+      // Wenige Zentimeter Abweichung, nicht zig Meter wie beim Kugeltest.
+      expect(hit!.point.distanceTo(sample.point)).toBeLessThan(0.5);
+      expect(hit!.radius).toBeCloseTo(sample.point.distanceTo(center), 1);
+    }
+  });
+
+  it('meldet keinen Treffer, wo nur die Umrisskugel im Weg liegt', () => {
+    const field = new Asteroids({ count: 120, seed: 31 });
+    const index = biggest(field);
+    const center = field.getCenter(index, new Vector3());
+    const radius = field.getRadius(index);
+    const sample = { point: new Vector3(), normal: new Vector3() };
+
+    // Eine Richtung suchen, in der die Oberflaeche deutlich unter dem Umriss
+    // liegt — eine Mulde oder eine Bruchflaeche.
+    let hollow: Vector3 | null = null;
+    for (let i = 0; i < 200 && !hollow; i++) {
+      const d = new Vector3(Math.sin(i * 1.7), Math.cos(i * 2.3), Math.sin(i * 0.9)).normalize();
+      field.sampleSurface(index, center.clone().addScaledVector(d, 5000), sample);
+      if (sample.point.distanceTo(center) < radius * 0.8) hollow = d;
+    }
+    expect(hollow).not.toBeNull();
+
+    // Punkt zwischen Oberflaeche und Umrisskugel: die Kugel wuerde melden,
+    // die Form nicht.
+    const surface = sample.point.distanceTo(center);
+    const from = center.clone().addScaledVector(hollow!, (surface + radius) * 0.5);
+    expect(from.distanceTo(center)).toBeLessThan(radius);
+    expect(field.hitSegment(from, hollow!.clone().negate(), 0.05)).toBeNull();
+  });
+
+  it('haelt beim Sweep den Rumpfradius Abstand', () => {
+    const field = new Asteroids({ count: 120, seed: 31 });
+    const index = biggest(field);
+    const center = field.getCenter(index, new Vector3());
+    const from = center.clone().add(new Vector3(0, 0, 4000));
+    const direction = center.clone().sub(from).normalize();
+
+    const bare = field.hitSegment(from, direction, 5000)!;
+    const bareDistance = bare.distance;
+    const padded = field.hitSegment(from, direction, 5000, 12)!;
+    expect(padded.index).toBe(index);
+    // Mit Rumpfradius endet die Fahrt zwoelf Meter frueher ...
+    expect(bareDistance - padded.distance).toBeCloseTo(12, 0);
+    // ... der gemeldete Radius bleibt aber der der Oberflaeche, sonst setzt
+    // die Rumpfkollision das Schiff zu weit heraus.
+    expect(padded.radius).toBeCloseTo(bare.radius, 0);
+  });
+});
+
+describe('Asteroidenfeld — Oberflaeche fuer die Landung', () => {
+  /** Groesster Brocken und der Mesh, mit dem er gezeichnet wird. */
+  function planetoid(field: Asteroids): { index: number; mesh: Mesh } {
+    let index = 0;
+    for (let i = 1; i < field.count; i++) {
+      if (field.getRadius(i) > field.getRadius(index)) index = i;
+    }
+    field.updateMatrixWorld(true);
+    const center = field.getCenter(index, new Vector3());
+    let node: LOD | null = null;
+    field.traverse((child) => {
+      if (!(child as Partial<LOD>).isLOD) return;
+      if (child.getWorldPosition(new Vector3()).distanceTo(center) > 1e-3) return;
+      node = child as LOD;
+    });
+    if (!node) throw new Error('kein Grossbrocken gefunden');
+
+    // Anflug nachstellen: erst dann baut der Knoten seine Nahstufe, und die
+    // ist es, auf der das Schiff aufsetzt.
+    const camera = new PerspectiveCamera();
+    camera.position.copy(center).add(new Vector3(0, 0, field.getRadius(index) * 2));
+    camera.updateMatrixWorld();
+    (node as LOD).update(camera);
+    field.updateMatrixWorld(true);
+    return { index, mesh: (node as LOD).levels[0]!.object as Mesh };
+  }
+
+  /**
+   * Der Kern des Vertrags zur Landung: der gemeldete Punkt muss auf den
+   * Dreiecken liegen, die der Spieler sieht. Eine Kugelnaeherung liegt bei
+   * dieser Deformation stellenweise ueber fuenfzig Meter daneben — das Schiff
+   * schwebte sichtbar ueber dem Fels.
+   */
+  it('meldet bei Planetoiden Punkte auf der gezeichneten Geometrie', () => {
+    const field = new Asteroids({ count: 200, seed: 31 });
+    const { index, mesh } = planetoid(field);
+    expect(field.getSizeClass(index)).toBe('huge');
+    expect(field.isLandable(index)).toBe(true);
+
+    const center = field.getCenter(index, new Vector3());
+    const sample = { point: new Vector3(), normal: new Vector3() };
+    const caster = new Raycaster();
+    const errors: number[] = [];
+    let worstSphere = 0;
+
+    for (let k = 0; k < 40; k++) {
+      // Richtungen ueber die Kugel streuen (goldener Winkel).
+      const y = 1 - (k / 39) * 2;
+      const r = Math.sqrt(Math.max(0, 1 - y * y));
+      const a = Math.PI * (3 - Math.sqrt(5)) * k;
+      const dir = new Vector3(Math.cos(a) * r, y, Math.sin(a) * r);
+      const from = center.clone().addScaledVector(dir, field.getRadius(index) * 4);
+
+      expect(field.sampleSurface(index, from, sample)).toBe(true);
+      caster.set(from, dir.clone().negate());
+      const hits = caster.intersectObject(mesh, false);
+      if (hits.length === 0) continue;
+      errors.push(hits[0]!.point.distanceTo(sample.point));
+      // Zum Vergleich: was die alte Kugelnaeherung geliefert haette.
+      worstSphere = Math.max(
+        worstSphere,
+        Math.abs(field.getRadius(index) - hits[0]!.point.distanceTo(center)),
+      );
+
+      // Die Normale ist die Neigung der getroffenen Flaeche, nicht die
+      // Blickrichtung — das Schiff richtet sich danach aus.
+      const face = hits[0]!.normal!.clone().transformDirection(mesh.matrixWorld);
+      expect(sample.normal.dot(face)).toBeGreaterThan(0.72);
+    }
+
+    expect(errors.length).toBeGreaterThan(30);
+    errors.sort((a, b) => a - b);
+    const median = errors[Math.floor(errors.length / 2)]!;
+    // Auf einem 400-m-Brocken: im Mittel unter einem Meter. Der schlechteste
+    // Fall liegt hoeher, und das bleibt auch so — eine ebene Bruchflaeche hat
+    // eine echte Kante, und die kann eine Dreieckssehne nicht treffen.
+    expect(median).toBeLessThan(1);
+    expect(errors[errors.length - 1]!).toBeLessThan(3);
+    // Die Kugelnaeherung laege dagegen zig Meter daneben — dafuer steht der
+    // ganze Aufwand hier.
+    expect(worstSphere).toBeGreaterThan(20);
+  });
+
+  it('gibt die Eigendrehung heraus, damit das Schiff mitdreht', () => {
+    const field = new Asteroids({ count: 20, seed: 5 });
+    const before = field.getOrientation(0, new Quaternion());
+    field.update(2);
+    const after = field.getOrientation(0, new Quaternion());
+    expect(before.angleTo(after)).toBeGreaterThan(0);
+
+    // Der abgetastete Punkt dreht mit dem Brocken mit.
+    const center = field.getCenter(0, new Vector3());
+    const from = center.clone().add(new Vector3(0, 0, 900));
+    const sample = { point: new Vector3(), normal: new Vector3() };
+    field.sampleSurface(0, from, sample);
+    const first = sample.point.distanceTo(center);
+    field.update(3);
+    field.getCenter(0, center);
+    field.sampleSurface(0, center.clone().add(new Vector3(0, 0, 900)), sample);
+    expect(sample.point.distanceTo(center)).not.toBeCloseTo(first, 6);
+  });
+});
+
+describe('Asteroidenfeld — Detailstufen', () => {
+  it('zieht die Umschaltweiten nach, wenn ein Grossbrocken nachwaechst', () => {
+    const field = new Asteroids({ count: 200, seed: 31, respawnDelay: 1 });
+    let index = 0;
+    for (let i = 1; i < field.count; i++) {
+      if (field.getRadius(i) > field.getRadius(index)) index = i;
+    }
+    const center = field.getCenter(index, new Vector3());
+    let node: LOD | null = null;
+    field.updateMatrixWorld(true);
+    field.traverse((child) => {
+      if ((child as Partial<LOD>).isLOD && child.position.distanceTo(center) < 1e-3) {
+        node = child as LOD;
+      }
+    });
+    const lod = node as unknown as LOD;
+    expect(lod).toBeTruthy();
+    expect(lod.levels.length).toBeGreaterThan(1);
+
+    while (field.isAlive(index)) field.damage(index, 50);
+    field.update(1.5);
+    expect(field.isAlive(index)).toBe(true);
+    const last = lod.levels[lod.levels.length - 1]!;
+    expect(last.distance).toBeCloseTo(field.getRadius(index) * 8, 3);
   });
 });
