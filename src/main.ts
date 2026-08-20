@@ -137,6 +137,39 @@ const hud = new Hud();
 const walk = new WalkController(input, ship);
 const player = new PlayerState({ input, ship, camera, seated, walk, hud });
 
+// --- Aussenansicht ---
+// Der Rumpf haengt am Schiffs-Rig und ist nur in der Aussenansicht sichtbar —
+// im Cockpit saesse der Pilot sonst in einem geschlossenen Blechkasten. Die
+// Kamera bleibt am Sitzmarker haengen und bekommt dort nur eine andere lokale
+// Pose, damit PlayerState seine Hierarchie behaelt.
+import { loadShipExterior, type Exterior } from './ship/Exterior';
+import { CHASE_KEY, ChaseCamera } from './player/ChaseCamera';
+
+const chase = new ChaseCamera(ship, camera);
+let exterior: Exterior | null = null;
+
+loadShipExterior(`${import.meta.env.BASE_URL}models/ship-exterior.glb`, renderer, sun.direction)
+  .then((loaded) => {
+    exterior = loaded;
+    ship.add(loaded);
+    console.info('Aussenrumpf geladen — C schaltet die Aussenansicht um');
+  })
+  .catch((error) => {
+    console.warn('Aussenrumpf-GLB nicht geladen, Aussenansicht bleibt aus:', error);
+  });
+
+/** Laeuft im Renderpfad direkt nach `player.updateCamera()`. */
+function updateExteriorView(dt: number): void {
+  const mode = chase.update(dt, {
+    walking: player.isWalking,
+    speed: flight.getSpeed(),
+    toggle: input.wasPressed(CHASE_KEY),
+  });
+  exterior?.setVisible(mode === 'chase');
+  exterior?.update(dt, flight);
+}
+// --- Ende Aussenansicht ---
+
 // ------------------------------------------------------- Innenraum aus Blender
 // Die Innenraummaterialien sind stark metallisch und brauchen eine
 // Reflexionsquelle, sonst bleiben sie schwarz. Nur der Innenraum bekommt diese
@@ -237,6 +270,7 @@ function render(dt: number): void {
 
   // Kamerapose (Sitz oder Gehen inkl. Blend) vor der Matrixaktualisierung.
   player.updateCamera();
+  updateExteriorView(dt); // --- Aussenansicht ---
   // Wackler kommt nach der Pose — die wird jeden Frame neu gesetzt.
   shake.update(dt);
   shake.applyTo(camera);
