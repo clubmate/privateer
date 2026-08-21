@@ -28,7 +28,17 @@ const LABEL_ANGULAR = 0.09;
 const LABEL_ASPECT = 4;
 
 const FRAME_PX = 256;
-const LABEL_PX = 1024;
+/**
+ * Breite der Schrifttafel in Bildpunkten.
+ *
+ * Die Tafel spannt {@link LABEL_ANGULAR} der Entfernung auf, also gut fuenf
+ * Grad Sehwinkel — auf einem 1080p-Schirm bei 65 Grad Blickfeld sind das rund
+ * einhundertfuenfzig Bildpunkte. Vorher standen hier 1024: das siebenfache
+ * dessen, was je auf den Schirm kommt, und jede Neubeschriftung schob ein
+ * ganzes Megabyte zur GPU. 384 ist immer noch reichlich ueberabgetastet und
+ * damit auf jedem Schirm scharf.
+ */
+const LABEL_PX = 384;
 
 const COLORS: Record<Exclude<MarkerMode, 'hidden'>, string> = {
   far: 'rgba(102, 234, 255, 0.72)',
@@ -226,5 +236,9 @@ function fitText(
 /** Entfernung lesbar und traege genug, dass die Tafel nicht jeden Frame neu muss. */
 export function formatDistance(meters: number): string {
   if (meters >= 1000) return `${(meters / 1000).toFixed(1)} KM`;
-  return `${Math.round(meters / 10) * 10} M`;
+  // Fuenfzig statt zehn Meter: bei fuenfzig Metern je Sekunde Annaeherung
+  // wechselte die Zeile sonst fuenfmal je Sekunde, und mit ihr die ganze
+  // Tafel. Auf dem Schirm ist die Tafel gut anderthalb Zentimeter breit —
+  // dort liest niemand Zehnerschritte mit.
+  return `${Math.round(meters / 50) * 50} M`;
 }

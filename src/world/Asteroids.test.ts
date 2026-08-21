@@ -498,7 +498,7 @@ describe('Asteroidenfeld — Treffer auf echter Geometrie', () => {
 
 describe('Asteroidenfeld — Oberflaeche fuer die Landung', () => {
   /** Groesster Brocken und der Mesh, mit dem er gezeichnet wird. */
-  function planetoid(field: Asteroids): { index: number; mesh: Mesh } {
+  function planetoid(field: Asteroids): { index: number; mesh: Mesh; frames: number } {
     let index = 0;
     for (let i = 1; i < field.count; i++) {
       if (field.getRadius(i) > field.getRadius(index)) index = i;
@@ -519,8 +519,23 @@ describe('Asteroidenfeld — Oberflaeche fuer die Landung', () => {
     camera.position.copy(center).add(new Vector3(0, 0, field.getRadius(index) * 2));
     camera.updateMatrixWorld();
     (node as LOD).update(camera);
+    // Die Nahstufe entsteht portioniert ueber mehrere Bilder — der Anflug
+    // dauert im Spiel lange genug dafuer. Hier wird er im Zeitraffer
+    // nachgestellt, bis die Stufe steht.
+    const frames = runUntilFine(field, node as LOD);
+    expect(frames).toBeGreaterThan(1);
     field.updateMatrixWorld(true);
-    return { index, mesh: (node as LOD).levels[0]!.object as Mesh };
+    return { index, mesh: (node as LOD).levels[0]!.object as Mesh, frames };
+  }
+
+  /** Bilder laufen lassen, bis die feinste Stufe eingehaengt ist. */
+  function runUntilFine(field: Asteroids, node: LOD, limit = 400): number {
+    const before = node.levels.length;
+    for (let frame = 1; frame <= limit; frame++) {
+      field.update(1 / 60);
+      if (node.levels.length > before) return frame;
+    }
+    throw new Error('Nahstufe wurde nicht fertig');
   }
 
   /**
@@ -529,6 +544,24 @@ describe('Asteroidenfeld — Oberflaeche fuer die Landung', () => {
    * dieser Deformation stellenweise ueber fuenfzig Meter daneben — das Schiff
    * schwebte sichtbar ueber dem Fels.
    */
+  it('baut die Nahstufe ueber mehrere Bilder und zeigt solange die grobe', () => {
+    const field = new Asteroids({ count: 200, seed: 31 });
+    const { index, frames } = planetoid(field);
+    // Am Stueck waeren das gut zwanzig Millisekunden mitten im Anflug. Die
+    // Portionierung verteilt sie; zwischen Baubeginn (3,2 x Radius) und
+    // Anzeige (1,7 x Radius) liegen dafuer hunderte Meter.
+    expect(frames).toBeGreaterThan(4);
+    const node = (field.children.find(
+      (child) => child.name === 'Asteroid' && child.position.equals(
+        (field as unknown as { positions: Vector3[] }).positions[index]!,
+      ),
+    ) ?? null) as LOD | null;
+    expect(node).not.toBeNull();
+    // Waehrend des Baus stand durchgehend eine Stufe zum Zeichnen bereit —
+    // sonst waere der Brocken beim Anflug kurz verschwunden.
+    expect(node!.levels.length).toBe(3);
+  });
+
   it('meldet bei Planetoiden Punkte auf der gezeichneten Geometrie', () => {
     const field = new Asteroids({ count: 200, seed: 31 });
     const { index, mesh } = planetoid(field);

@@ -24,6 +24,27 @@ const SIZE = 256;
 /** Aktualisierungen je Sekunde — mehr braucht ein Radar nicht. */
 const REFRESH_HZ = 15;
 
+/** Umlaufgeschwindigkeit des Suchkeils in Radiant je Sekunde. */
+const SWEEP_RATE = 1.4;
+
+/**
+ * Den Suchkeil um die verstrichene Zeit weiterdrehen.
+ *
+ * Als eigene Funktion, weil hier zwei Fallen liegen, die im Bild erst
+ * auffallen, wenn es zu spaet ist:
+ *
+ * 1. Der Zaehler der Anzeige startet auf `Infinity`, damit das erste Bild
+ *    sofort entsteht. Ungeklemmt wird daraus ein NaN im Winkel — und ein NaN
+ *    im Winkel legt beim naechsten Farbverlauf den ganzen Bilddurchlauf lahm.
+ * 2. Gerechnet gehoert die Zeit *seit der letzten Aktualisierung*, nicht die
+ *    eines Bildes. Steht dort das Bild-Delta, dreht der Keil bei 60 Bildern
+ *    und 15 Hz mit einem Viertel seiner Geschwindigkeit — und bei 30 Bildern
+ *    mit der Haelfte.
+ */
+export function advanceSweep(sweep: number, elapsed: number, maxElapsed: number): number {
+  return (sweep + Math.min(elapsed, maxElapsed) * SWEEP_RATE) % (Math.PI * 2);
+}
+
 export interface RadarParams {
   /** Angezeigte Entfernung bis zum Rand in Metern. */
   range: number;
@@ -86,6 +107,8 @@ export class RadarScreen {
   private readonly ctx: CanvasRenderingContext2D;
   private readonly params: RadarParams;
   private readonly contacts: Contact[] = [];
+  /** Belegte Eintraege im Pool — `contacts` selbst wird nie gekuerzt. */
+  private contactCount = 0;
   private sinceRefresh = Infinity;
   private sweep = 0;
 
@@ -124,8 +147,9 @@ export class RadarScreen {
   update(dt: number, view: RadarView): void {
     this.sinceRefresh += dt;
     if (this.sinceRefresh < 1 / REFRESH_HZ) return;
+    // Siehe {@link advanceSweep} — die Zeit seit der letzten Aktualisierung.
+    this.sweep = advanceSweep(this.sweep, this.sinceRefresh, 2 / REFRESH_HZ);
     this.sinceRefresh = 0;
-    this.sweep = (this.sweep + dt * 1.4) % (Math.PI * 2);
 
     this.collect(view);
     this.drawFrame();
@@ -135,7 +159,10 @@ export class RadarScreen {
   // ------------------------------------------------------------------ intern
 
   private collect(view: RadarView): void {
-    this.contacts.length = 0;
+    // Der Pool waechst mit, wird aber nie verworfen: sonst entstuenden je
+    // Aktualisierung bis zu 48 frische Objekte, also gut siebenhundert je
+    // Sekunde, fuer Daten, die einen Zeichenvorgang lang leben.
+    this.contactCount = 0;
     _inverse.copy(view.orientation).invert();
 
     const { asteroids } = view;
@@ -149,19 +176,25 @@ export class RadarScreen {
       toRadarPoint(_local, this.params.range, _point);
       if (_point.radius > 1) continue;
 
-      this.contacts.push({
-        x: _point.x,
-        y: _point.y,
-        height: Math.max(Math.min(_local.y / this.params.range, 1), -1),
-        size: asteroids.getRadius(i),
-        locked: i === view.targetIndex,
-      });
+      const contact =
+        this.contacts[this.contactCount] ??
+        (this.contacts[this.contactCount] = { x: 0, y: 0, height: 0, size: 0, locked: false });
+      contact.x = _point.x;
+      contact.y = _point.y;
+      contact.height = Math.max(Math.min(_local.y / this.params.range, 1), -1);
+      contact.size = asteroids.getRadius(i);
+      contact.locked = i === view.targetIndex;
+      this.contactCount++;
     }
 
     // Bei vollem Feld nur die naechsten zeichnen — das Display bleibt lesbar.
-    if (this.contacts.length > this.params.maxContacts) {
-      this.contacts.sort((a, b) => Math.hypot(a.x, a.y) - Math.hypot(b.x, b.y));
-      this.contacts.length = this.params.maxContacts;
+    if (this.contactCount > this.params.maxContacts) {
+      // Nur der belegte Teil des Pools wird sortiert; dahinter stehen die
+      // ausgemusterten Eintraege des letzten Durchgangs.
+      const live = this.contacts.slice(0, this.contactCount);
+      live.sort((a, b) => a.x * a.x + a.y * a.y - (b.x * b.x + b.y * b.y));
+      for (let i = 0; i < live.length; i++) this.contacts[i] = live[i]!;
+      this.contactCount = this.params.maxContacts;
     }
   }
 
@@ -208,7 +241,8 @@ export class RadarScreen {
     ctx.closePath();
     ctx.fill();
 
-    for (const contact of this.contacts) {
+    for (let n = 0; n < this.contactCount; n++) {
+      const contact = this.contacts[n]!;
       // Bildschirm-y waechst nach unten, voraus soll oben sein.
       const x = c + contact.x * r;
       const y = c - contact.y * r;

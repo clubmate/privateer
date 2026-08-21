@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Vector3 } from 'three';
-import { toRadarPoint, type RadarPoint } from './RadarScreen';
+import { advanceSweep, toRadarPoint, type RadarPoint } from './RadarScreen';
 
 /**
  * Nur die Abbildung wird getestet, nicht das Zeichnen: dafuer braeuchte es ein
@@ -50,5 +50,31 @@ describe('toRadarPoint', () => {
     const near = toRadarPoint(new Vector3(0, 0, -range / 4), range, point());
     const far = toRadarPoint(new Vector3(0, 0, -range / 2), range, point());
     expect(far.y).toBeCloseTo(near.y * 2, 6);
+  });
+
+});
+
+describe('advanceSweep', () => {
+  const MAX = 2 / 15;
+
+  it('bleibt endlich, auch wenn der Zaehler auf Infinity startet', () => {
+    // Genau so faengt die Anzeige an: `sinceRefresh = Infinity`, damit das
+    // erste Bild sofort gezeichnet wird. Ungeklemmt wird daraus ein NaN, und
+    // ein NaN im Winkel legt den naechsten Farbverlauf und damit den ganzen
+    // Bilddurchlauf lahm.
+    const sweep = advanceSweep(0, Infinity, MAX);
+    expect(Number.isFinite(sweep)).toBe(true);
+    expect(sweep).toBeCloseTo(MAX * 1.4, 9);
+  });
+
+  it('dreht um die verstrichene Zeit, nicht um ein Bild', () => {
+    expect(advanceSweep(0, 4 / 60, MAX)).toBeCloseTo((4 / 60) * 1.4, 9);
+  });
+
+  it('bleibt im Vollkreis', () => {
+    let sweep = 0;
+    for (let i = 0; i < 200; i++) sweep = advanceSweep(sweep, 1 / 15, MAX);
+    expect(sweep).toBeGreaterThanOrEqual(0);
+    expect(sweep).toBeLessThan(Math.PI * 2);
   });
 });

@@ -75,8 +75,9 @@ export function computeLeadPoint(
       const t1 = (-b - root) / (2 * a);
       const t2 = (-b + root) / (2 * a);
       // Kleinste positive Loesung; negative bedeuten "nicht einholbar".
-      const positives = [t1, t2].filter((t) => t > 0);
-      if (positives.length > 0) time = Math.min(...positives);
+      // Zwei Vergleiche statt Feld, Closure und Spread — dieselbe Antwort.
+      if (t1 > 0) time = t2 > 0 ? Math.min(t1, t2) : t1;
+      else if (t2 > 0) time = t2;
     }
   }
 
@@ -96,6 +97,9 @@ const _toTarget = new Vector3();
 
 export class Targeting {
   private index = -1;
+  /** Arbeitsfelder fuer {@link cycle} — wiederverwendet statt je Druck neu. */
+  private readonly candidates: number[] = [];
+  private readonly scores: number[] = [];
   private readonly params: TargetingParams;
   private readonly info: TargetInfo = {
     index: -1,
@@ -130,28 +134,60 @@ export class Targeting {
    * erfasst, wird auf den naechsten der Liste weitergeschaltet.
    */
   cycle(asteroids: Asteroids, origin: Vector3, forward: Vector3): number {
-    const candidates: Array<{ index: number; angle: number }> = [];
+    // Gerechnet wird im Kosinus, nicht im Winkel. `angleTo` ist ein `acos` und
+    // zwei Wurzeln je Kandidat — bei 420 Brocken also 420 `acos` je
+    // Tastendruck, nur um danach zu sortieren. Beide Vektoren sind normiert,
+    // das Skalarprodukt ist der Kosinus, und weil er auf [0, pi] streng
+    // faellt, ergibt "absteigend nach Kosinus" exakt dieselbe Reihenfolge wie
+    // "aufsteigend nach Winkel".
+    const minCos = Math.cos(this.params.cone);
+    const range = this.params.range;
+    const candidates = this.candidates;
+    const scores = this.scores;
+    let count = 0;
 
     for (let i = 0; i < asteroids.count; i++) {
       if (!asteroids.isAlive(i)) continue;
       asteroids.getCenter(i, _center);
       _toTarget.subVectors(_center, origin);
-      const distance = _toTarget.length();
-      if (distance > this.params.range || distance < 1e-3) continue;
+      const distanceSq = _toTarget.lengthSq();
+      if (distanceSq > range * range || distanceSq < 1e-6) continue;
 
-      const angle = _toTarget.divideScalar(distance).angleTo(forward);
-      if (angle > this.params.cone) continue;
-      candidates.push({ index: i, angle });
+      const cos = _toTarget.dot(forward) / Math.sqrt(distanceSq);
+      if (cos < minCos) continue;
+      candidates[count] = i;
+      scores[count] = cos;
+      count++;
     }
 
-    if (candidates.length === 0) {
+    if (count === 0) {
       this.index = -1;
       return -1;
     }
 
-    candidates.sort((a, b) => a.angle - b.angle);
-    const current = candidates.findIndex((c) => c.index === this.index);
-    this.index = candidates[(current + 1) % candidates.length]!.index;
+    // Einfaches Einfuegesortieren: die Liste ist kurz (was im Kegel liegt),
+    // und ein Vergleicher waere hier eine Closure je Tastendruck.
+    for (let i = 1; i < count; i++) {
+      const value = candidates[i]!;
+      const score = scores[i]!;
+      let j = i - 1;
+      while (j >= 0 && scores[j]! < score) {
+        candidates[j + 1] = candidates[j]!;
+        scores[j + 1] = scores[j]!;
+        j--;
+      }
+      candidates[j + 1] = value;
+      scores[j + 1] = score;
+    }
+
+    let current = -1;
+    for (let i = 0; i < count; i++) {
+      if (candidates[i] === this.index) {
+        current = i;
+        break;
+      }
+    }
+    this.index = candidates[(current + 1) % count]!;
     return this.index;
   }
 

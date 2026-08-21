@@ -3,7 +3,6 @@ import {
   BufferAttribute,
   BufferGeometry,
   Color,
-  DynamicDrawUsage,
   Points,
   ShaderMaterial,
   Vector3,
@@ -62,10 +61,18 @@ const VERTEX = /* glsl */ `
   uniform float uSize;
   uniform float uHalf;
   uniform float uScale;
+  uniform vec3 uCenter;
   varying float vFade;
 
   void main() {
-    vec4 view = modelViewMatrix * vec4(position, 1.0);
+    // Der Umschlag steht hier und nicht auf der CPU. Dieselbe Formel — GLSL
+    // rechnet mod() ebenfalls als x - y*floor(x/y) —, aber das Lagefeld bleibt
+    // dadurch unveraendert: statt 84 Kilobyte je Bild geht ein einziger
+    // Vektor zur GPU. Die Genauigkeit aendert sich nicht, das Attribut war
+    // ohnehin schon float32.
+    float span = uHalf * 2.0;
+    vec3 world = uCenter - uHalf + mod(position - uCenter + uHalf, span);
+    vec4 view = viewMatrix * vec4(world, 1.0);
     float dist = length(view.xyz);
     // Innen aufblenden, aussen ausblenden: der Umschlagrand liegt im
     // ausgeblendeten Bereich und ist damit unsichtbar.
@@ -98,8 +105,6 @@ const FRAGMENT = /* glsl */ `
 export class AsteroidDust extends Points {
   private readonly half: number;
   private readonly array: Float32Array;
-  private readonly attribute: BufferAttribute;
-  private readonly anchor = new Vector3();
 
   constructor(options: AsteroidDustOptions = {}) {
     const o = { ...DEFAULTS, ...options };
@@ -108,9 +113,9 @@ export class AsteroidDust extends Points {
     for (let i = 0; i < array.length; i++) array[i] = (rng() - 0.5) * o.extent;
 
     const geometry = new BufferGeometry();
-    const attribute = new BufferAttribute(array, 3);
-    attribute.setUsage(DynamicDrawUsage);
-    geometry.setAttribute('position', attribute);
+    // Statisch: die Koerner stehen fuer immer da, wo sie erzeugt wurden. Was
+    // sich bewegt, ist der Wuerfel um sie herum, und der ist ein Uniform.
+    geometry.setAttribute('position', new BufferAttribute(array, 3));
     // Der Wuerfel wandert je Bild mit der Kamera; eine Sichtkegelpruefung
     // gegen eine veraltete Huellkugel wuerde ihn gelegentlich wegwerfen.
     geometry.boundingSphere = null;
@@ -121,6 +126,7 @@ export class AsteroidDust extends Points {
         uniforms: {
           uSize: { value: o.size },
           uHalf: { value: o.extent * 0.5 },
+          uCenter: { value: new Vector3() },
           uScale: { value: 300 },
           uColor: { value: new Color(0.62, 0.6, 0.56) },
           uOpacity: { value: 0.5 },
@@ -137,7 +143,6 @@ export class AsteroidDust extends Points {
     this.frustumCulled = false;
     this.half = o.extent * 0.5;
     this.array = array;
-    this.attribute = attribute;
   }
 
   /**
@@ -154,26 +159,30 @@ export class AsteroidDust extends Points {
    * Den Wuerfel der Kamera nachfuehren. Koerner, die hinten herausfallen,
    * kommen vorne wieder herein — der Umschlag findet im ausgeblendeten
    * Bereich statt und ist deshalb nicht zu sehen.
+   *
+   * Die Arbeit selbst macht der Vertex-Shader; hier wandert nur der Mittelpunkt
+   * mit. Vorher lief je Bild eine Schleife ueber 21.000 Zahlen, von denen sich
+   * bei 100 m/s ganze 45 aenderten — und trotzdem gingen alle 84 Kilobyte
+   * erneut zur GPU.
    */
   update(cameraWorldPosition: Vector3): void {
-    const anchor = this.anchor;
-    // Nur umschlagen, wenn sich ueberhaupt etwas bewegt hat: bei stehendem
-    // Schiff waere das jedes Bild ein Durchlauf ueber 2600 Koerner umsonst.
-    if (anchor.distanceToSquared(cameraWorldPosition) < 1e-4) return;
-    anchor.copy(cameraWorldPosition);
+    (this.material as ShaderMaterial).uniforms['uCenter']!.value.copy(cameraWorldPosition);
+  }
 
-    const array = this.array;
+  /**
+   * Wo der Wuerfel gerade steht. Nur fuer Tests — die Koerner selbst stehen
+   * unveraendert im Attribut, ihre Lage ergibt sich erst im Shader.
+   */
+  wrapped(index: number, out: Vector3): Vector3 {
+    const center = (this.material as ShaderMaterial).uniforms['uCenter']!.value as Vector3;
     const half = this.half;
     const span = half * 2;
-    const cx = cameraWorldPosition.x;
-    const cy = cameraWorldPosition.y;
-    const cz = cameraWorldPosition.z;
-    for (let i = 0; i < array.length; i += 3) {
-      array[i] = wrap(array[i]!, cx, half, span);
-      array[i + 1] = wrap(array[i + 1]!, cy, half, span);
-      array[i + 2] = wrap(array[i + 2]!, cz, half, span);
-    }
-    this.attribute.needsUpdate = true;
+    const a = this.array;
+    return out.set(
+      wrap(a[index * 3]!, center.x, half, span),
+      wrap(a[index * 3 + 1]!, center.y, half, span),
+      wrap(a[index * 3 + 2]!, center.z, half, span),
+    );
   }
 
   dispose(): void {

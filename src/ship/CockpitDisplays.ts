@@ -648,6 +648,12 @@ interface ScreenDef {
  * stauchen die Ziffern. MFD0 liegt aus Sicht des Piloten rechts, MFD2 links
  * (der Innenraum wird beim Laden um die Y-Achse gedreht).
  */
+/**
+ * Takt fuer Schirme, die gerade niemand ansieht. Nicht null — beim
+ * Zurueckschalten soll sofort etwas Aktuelles dastehen.
+ */
+const IDLE_HZ = 0.5;
+
 const SCREENS: ScreenDef[] = [
   {
     mesh: 'SM_Screen_MFD2', width: 384, height: 216, hz: 12,
@@ -799,7 +805,7 @@ export class CockpitDisplays {
     let worst = 1;
     for (const panel of this.panels) {
       panel.since += dt;
-      const due = panel.since * panel.def.hz;
+      const due = panel.since * this.rateOf(panel, state);
       if (due >= worst) {
         worst = due;
         candidate = panel;
@@ -813,6 +819,33 @@ export class CockpitDisplays {
       candidate.def.draw(candidate.paint, state);
       candidate.texture.needsUpdate = true;
     }
+  }
+
+  /**
+   * Wie oft dieser Schirm gerade neu gemalt werden muss.
+   *
+   * **Warum ueberhaupt gestaffelt:** ein Schirm neu zu malen heisst, seine
+   * ganze Leinwand zu zeichnen und als Textur hochzuladen — bei den fuenf
+   * Schirmen zusammen rund vierzehn Megabyte je Sekunde. Das lohnt nur fuer
+   * das, was jemand ansieht.
+   *
+   * - **Aussenansicht:** alle Schirme sind hoechstens ein paar Bildpunkte
+   *   gross oder ueberhaupt nicht im Bild.
+   * - **Gang- und Werkbankschirm im Sitzen:** beide haengen hinter dem
+   *   Piloten an der Wand. Wer sitzt, sieht sie nicht.
+   * - **Umgekehrt beim Gehen:** dann liegen die beiden Konsolenschirme und
+   *   der Overhead ausserhalb des Blicks.
+   *
+   * Ganz auf null geht keiner: ein Schirm, der beim Umschalten erst eine
+   * Sekunde lang veraltet dastuende, faellt staerker auf als die Ersparnis
+   * wert ist.
+   */
+  private rateOf(panel: Panel, state: HudState): number {
+    const hz = panel.def.hz;
+    if (state.external) return Math.min(hz, IDLE_HZ);
+    const wall = panel.def.draw === drawCorridor || panel.def.draw === drawBench;
+    if (wall !== state.walking) return Math.min(hz, IDLE_HZ);
+    return hz;
   }
 
   dispose(): void {

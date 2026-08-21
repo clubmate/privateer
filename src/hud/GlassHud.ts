@@ -527,9 +527,18 @@ export class GlassHud {
    * Scan ist, wie viel dieser Brocken schon hergegeben hat.
    */
   private updateLabel(distance: number, integrity: number, mining: MiningStatus | null): void {
+    // Unter einem Kilometer auf fuenf Meter gerundet. Auf den Meter genau
+    // wechselte die Zeile bei jeder Relativgeschwindigkeit ueber 1 m/s in
+    // *jedem* Bild — also sechzig Neuzeichnungen und Texturuploads je Sekunde
+    // fuer eine Zahl, die niemand so schnell liest.
+    //
+    // Die Tafel selbst wandert unveraendert fluessig mit: ihre Lage wird
+    // weiterhin je Bild gesetzt (siehe `targetGroup`). Traeger wird nur der
+    // Textinhalt, und dort gibt es keine bewegte Kante, die stufig werden
+    // koennte.
     const text = distance >= 1000
       ? `${(distance / 1000).toFixed(2)} KM`
-      : `${Math.round(distance)} M`;
+      : `${Math.round(distance / 5) * 5} M`;
     const bars = Math.round(integrity * 10);
     const content = miningLine(mining);
     const line = `${text}  ${bars}  ${content}`;

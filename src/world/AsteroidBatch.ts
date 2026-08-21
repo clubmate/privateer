@@ -311,14 +311,53 @@ export function createRockMaterial(): RockMaterial {
           return band * band;
         }
 
-        /** Anstieg des Rauschens, normiert auf die Schrittweite. */
+        /**
+         * Anstieg des Rauschens — analytisch, nicht abgetastet.
+         *
+         * **Warum das der groesste Posten des ganzen Shaders war:** die
+         * Vorgaengerfassung hat das Rauschen viermal ausgewertet (Wert plus
+         * drei Vorwaertsdifferenzen). Jede Auswertung sind acht Hashes, macht
+         * zweiunddreissig je Oktave — bei fuenf Oktaven einhundertsechzig
+         * Hashes je Bildpunkt, nur fuer das Relief.
+         *
+         * Dabei ist der Gradient von Wertrauschen in geschlossener Form
+         * bekannt: dieselben acht Eckwerte, aus denen der Wert entsteht,
+         * liefern auch die Ableitung. Acht Hashes statt zweiunddreissig, und
+         * das Rauschfeld bleibt dasselbe — es ist derselbe Hash auf demselben
+         * Gitter, nur anders ausgewertet.
+         *
+         * Nebenbei wird der Gradient dadurch *richtig*: die Differenz lief
+         * ueber eine halbe Gitterzelle und nur nach vorn, glaettete also die
+         * Neigung und verschob sie um eine Viertelzelle.
+         */
         vec3 rockGradient(vec3 p) {
-          const float e = 0.5;
-          float n0 = rockNoise(p);
-          return (1.0 / e) * vec3(
-            rockNoise(p + vec3(e, 0.0, 0.0)) - n0,
-            rockNoise(p + vec3(0.0, e, 0.0)) - n0,
-            rockNoise(p + vec3(0.0, 0.0, e)) - n0);
+          vec3 i = floor(p);
+          vec3 f = fract(p);
+          // Glaettung und ihre Ableitung — dieselbe Kurve wie in rockNoise.
+          vec3 u = f * f * (3.0 - 2.0 * f);
+          vec3 du = 6.0 * f * (1.0 - f);
+
+          float a = rockHash(i);
+          float b = rockHash(i + vec3(1, 0, 0));
+          float c = rockHash(i + vec3(0, 1, 0));
+          float d = rockHash(i + vec3(1, 1, 0));
+          float e = rockHash(i + vec3(0, 0, 1));
+          float g = rockHash(i + vec3(1, 0, 1));
+          float h = rockHash(i + vec3(0, 1, 1));
+          float k = rockHash(i + vec3(1, 1, 1));
+
+          float k1 = b - a;
+          float k2 = c - a;
+          float k3 = e - a;
+          float k4 = a - b - c + d;
+          float k5 = a - c - e + h;
+          float k6 = a - b - e + g;
+          float k7 = -a + b + c - d + e - g - h + k;
+
+          return du * vec3(
+            k1 + k4 * u.y + k6 * u.z + k7 * u.y * u.z,
+            k2 + k4 * u.x + k5 * u.z + k7 * u.z * u.x,
+            k3 + k5 * u.y + k6 * u.x + k7 * u.x * u.y);
         }`,
       )
       .replace(
@@ -343,11 +382,18 @@ export function createRockMaterial(): RockMaterial {
         roughnessFactor = mix(vRockMod.z, vRockMod.z * 0.6, veinMask);
         // Streuung in der Rauheit: erst dadurch wandern beim Taumeln
         // Glanzflecken ueber die Flanke, statt dass alles gleich stumpf bleibt.
+        //
+        // Die Klammer ist nicht Sparsamkeit, sondern Buchhaltung: jenseits von
+        // GLOSS_FAR ist rockGloss exakt null, das Rauschen wird also mit null
+        // multipliziert — und trotzdem ausgewertet. Auf jedem Fernbrocken sind
+        // das acht Hashes fuer ein Ergebnis, das feststeht.
         float rockGloss = 1.0 - smoothstep(${GLOSS_NEAR.toFixed(1)}, ${GLOSS_FAR.toFixed(1)}, rockDist);
-        roughnessFactor = clamp(
-          roughnessFactor * (1.0 + rockGloss * ${GLOSS_STRENGTH.toFixed(2)}
-            * (rockNoise(vRockPos * ${GLOSS_SCALE.toFixed(2)}) - 0.5)),
-          0.06, 1.0);`,
+        if (rockGloss > 0.01) {
+          roughnessFactor = clamp(
+            roughnessFactor * (1.0 + rockGloss * ${GLOSS_STRENGTH.toFixed(2)}
+              * (rockNoise(vRockPos * ${GLOSS_SCALE.toFixed(2)}) - 0.5)),
+            0.06, 1.0);
+        }`,
       )
       .replace(
         '#include <metalnessmap_fragment>',

@@ -112,6 +112,65 @@ const WORLD_AO_PARAMETERS = {
 const WORLD_AO_BLEND = 0.6;
 
 /**
+ * GTAO ohne die Vollbild-Kopie.
+ *
+ * **Was der Standarddurchgang tut:** er kopiert erst das ganze Bild vom Lese-
+ * in den Schreibpuffer und legt die Verdeckung dann obendrauf. Die Kopie ist
+ * aber ueberfluessig, denn der Mischer ist eine reine Multiplikation
+ * (`blendSrc = DstColor`, `blendDst = Zero`) — er *braucht* das Bild, auf das
+ * er trifft, und veraendert nichts anderes daran. Multipliziert man direkt auf
+ * den Lesepuffer, kommt Bit fuer Bit dasselbe heraus.
+ *
+ * Gespart wird damit je Bild: ein Vollbild-Durchgang auf ein multisampeltes
+ * Ziel, der zugehoerige Aufloesungs-Blit und der Puffertausch. Der Tausch ist
+ * der eigentliche Gewinn — er war der einzige in der ganzen Kette, und weil
+ * die Puffer dadurch von Bild zu Bild pendelten, musste *beiden* der volle
+ * Multisample- und Tiefenspeicher spendiert werden.
+ *
+ * `Off` laesst die Elternklasse alles rechnen (Normalen, Verdeckung,
+ * Entrauschung) und nur die Ausgabe weg — genau die uebernehmen wir hier.
+ */
+class DirectGtaoPass extends GTAOPass {
+  constructor(scene: Scene, camera: Camera, width: number, height: number) {
+    super(scene, camera, width, height);
+    // Wir schreiben in den Lesepuffer; der Composer darf nicht tauschen.
+    this.needsSwap = false;
+  }
+
+  override render(
+    renderer: WebGLRenderer,
+    writeBuffer: WebGLRenderTarget,
+    readBuffer: WebGLRenderTarget,
+    deltaTime = 0,
+    maskActive = false,
+  ): void {
+    const self = this as unknown as {
+      output: number;
+      blendIntensity: number;
+      blendMaterial: { uniforms: Record<string, { value: unknown }> };
+      pdRenderTarget: WebGLRenderTarget;
+      _renderPass(r: WebGLRenderer, m: unknown, t: WebGLRenderTarget | null): void;
+    };
+
+    // Zum letzten Durchgang der Kette gehoert der Bildschirm, und auf den kann
+    // man nicht multiplizieren — dann eben auf dem regulaeren Weg. Tritt in
+    // dieser Kette nicht auf (Bloom und OutputPass folgen noch), aber wer den
+    // Durchgang umhaengt, soll kein schwarzes Bild bekommen.
+    if (this.renderToScreen || typeof self._renderPass !== 'function' || !self.blendMaterial) {
+      self.output = GTAOPass.OUTPUT.Default;
+      super.render(renderer, writeBuffer, readBuffer, deltaTime, maskActive);
+      return;
+    }
+
+    self.output = GTAOPass.OUTPUT.Off;
+    super.render(renderer, writeBuffer, readBuffer, deltaTime, maskActive);
+    self.blendMaterial.uniforms['intensity']!.value = self.blendIntensity;
+    self.blendMaterial.uniforms['tDiffuse']!.value = self.pdRenderTarget.texture;
+    self._renderPass(renderer, self.blendMaterial, readBuffer);
+  }
+}
+
+/**
  * Ein Durchgang, der nichts zeichnet: er gibt nur die Schattenkarte frei.
  *
  * **Warum das noetig ist:** Three zeichnet Schattenkarten am Anfang von
@@ -180,6 +239,9 @@ export function createPostprocessing(
 
   const composer = new EffectComposer(renderer, target);
   composer.setPixelRatio(renderer.getPixelRatio());
+  // Mitgefuehrt, weil der Welt-GTAO erst spaeter entstehen kann und dann seine
+  // Groesse braucht.
+  const currentSize = size.clone();
 
   composer.addPass(new RenderPass(scene, deepCamera));
 
@@ -194,17 +256,18 @@ export function createPostprocessing(
   worldPass.clearDepth = true;
   composer.addPass(worldPass);
 
-  // Verdeckung draussen, *bevor* der Innenraum darueber kommt. Die Reihenfolge
+  // Platz fuer die Verdeckung draussen — *vor* dem Innenraum. Die Reihenfolge
   // ist keine Geschmacksfrage: dieser Durchgang kennt nur die Tiefe der
   // Weltkamera. Liefe er nach dem Innenraum, verdunkelte er Kanzelstreben
   // anhand der Kraterwand, die dahinter liegt.
-  const worldGtao = new GTAOPass(scene, worldCamera, size.x, size.y);
-  worldGtao.output = GTAOPass.OUTPUT.Default;
-  worldGtao.blendIntensity = WORLD_AO_BLEND;
-  worldGtao.updateGtaoMaterial(WORLD_AO_PARAMETERS);
-  // Standardmaessig aus — siehe {@link WORLD_AO_PARAMETERS}.
-  worldGtao.enabled = false;
-  composer.addPass(worldGtao);
+  //
+  // Erzeugt wird er erst, wenn ihn jemand einschaltet: ein GTAOPass legt im
+  // Konstruktor drei Render-Targets in voller Bildgroesse an und zieht sie bei
+  // jedem Resize mit. Fuer einen Durchgang, der standardmaessig aus ist und
+  // nachweislich nichts findet (siehe {@link WORLD_AO_PARAMETERS}), sind das
+  // gut hundert Megabyte fuer nichts.
+  const worldGtaoIndex = composer.passes.length;
+  let worldGtao: DirectGtaoPass | null = null;
 
   const nearPass = new RenderPass(scene, nearCamera);
   nearPass.clear = false;
@@ -213,8 +276,7 @@ export function createPostprocessing(
 
   // GTAO rechnet mit der Nahkamera und sieht damit nur den Innenraum; fuer den
   // Hintergrund liefert seine Tiefe "unendlich", also keine Verdeckung.
-  const gtao = new GTAOPass(scene, nearCamera, size.x, size.y);
-  gtao.output = GTAOPass.OUTPUT.Default;
+  const gtao = new DirectGtaoPass(scene, nearCamera, size.x, size.y);
   gtao.blendIntensity = AO_BLEND;
   gtao.updateGtaoMaterial(AO_PARAMETERS);
   composer.addPass(gtao);
@@ -228,12 +290,21 @@ export function createPostprocessing(
       gtao.enabled = enabled;
     },
     setWorldAmbientOcclusion: (enabled: boolean) => {
+      if (!worldGtao) {
+        if (!enabled) return;
+        worldGtao = new DirectGtaoPass(scene, worldCamera, size.x, size.y);
+        worldGtao.blendIntensity = WORLD_AO_BLEND;
+        worldGtao.updateGtaoMaterial(WORLD_AO_PARAMETERS);
+        worldGtao.setSize(currentSize.x, currentSize.y);
+        composer.insertPass(worldGtao, worldGtaoIndex);
+      }
       worldGtao.enabled = enabled;
     },
     requestShadowUpdate: () => shadowRelease.arm(),
     setSize: (width, height) => {
       composer.setPixelRatio(renderer.getPixelRatio());
       composer.setSize(width, height);
+      currentSize.set(width, height).multiplyScalar(renderer.getPixelRatio());
     },
     dispose: () => {
       composer.dispose();

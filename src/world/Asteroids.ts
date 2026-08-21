@@ -1,7 +1,7 @@
 import { Euler, Group, LOD, Object3D, Quaternion, Vector3 } from 'three';
 import type { Camera, Texture } from 'three';
 import { makeRng } from './noise';
-import { buildRockGeometry, RockShape, type ArchetypeId } from './AsteroidShapes';
+import { buildRockGeometry, RockGeometryBuild, RockShape, type ArchetypeId } from './AsteroidShapes';
 import { createRockMaterial, RockBatch, setRockEnvironment, type RockMaterial } from './AsteroidBatch';
 import {
   MINERALS,
@@ -129,6 +129,18 @@ const DETAIL_FINE = 6;
 const FINE_BUILD = 3.2;
 /** ... und ab diesem gezeigt. */
 const FINE_SWITCH = 1.7;
+
+/**
+ * Wieviel vom Nahstufenaufbau je Bild erledigt wird (Punkte bzw. Dreiecke).
+ *
+ * **Warum ueberhaupt portioniert:** die Stufe hat 40.962 Punkte und 81.920
+ * Dreiecke; am Stueck sind das gut zwanzig Millisekunden — mitten im Anflug
+ * ein sichtbarer Hänger. Zwischen Baubeginn (3,2 × Radius) und Anzeige
+ * (1,7 × Radius) liegen bei einem 400-m-Brocken aber ueber sechshundert
+ * Meter: selbst mit 500 m/s sind das siebzig Bilder, und gebraucht werden
+ * knapp fuenfzehn. Bis dahin steht die grobe Stufe, genau wie vorher auch.
+ */
+const FINE_BUDGET = 6000;
 
 const _camPos = new Vector3();
 const _nodePos = new Vector3();
@@ -263,6 +275,12 @@ export class Asteroids extends Group implements AsteroidField {
 
   /** Alle Instanzstapel, deren Matrizen je Bild hochgeladen werden. */
   private readonly moving: RockBatch[] = [];
+
+  /** Plaetze mit eigener Geometrie — fuer {@link findShadowFocus}. */
+  private readonly soloIndices: number[] = [];
+
+  /** Laufende Nahstufenaufbauten, je Bild ein Stueck weiter. */
+  private readonly pending: { index: number; build: RockGeometryBuild }[] = [];
 
   private readonly hit: AsteroidHit = { index: -1, point: new Vector3(), distance: 0, radius: 0 };
   /** Oberflaechenradius der letzten Auswertung in {@link depth}. */
@@ -469,6 +487,10 @@ export class Asteroids extends Group implements AsteroidField {
       this.add(batch.mesh);
     }
 
+    // Die Formen der Instanzstapel bekommen genau eine Geometrie — ihre
+    // Auswertungen werden danach nicht mehr gebraucht.
+    for (const pool of pools) for (const shape of pool) shape.releaseSamples();
+
     for (let i = 0; i < this.count; i++) {
       const id = variantOf[i]!;
       if (id < 0) {
@@ -512,6 +534,7 @@ export class Asteroids extends Group implements AsteroidField {
     this.parts[index] = parts;
     this.slots[index] = 0;
     this.nodes[index] = node;
+    this.soloIndices.push(index);
     this.add(node);
 
     // Nur Planetoiden bekommen die Nahstufe: auf ihnen wird gelandet, und nur
@@ -519,6 +542,9 @@ export class Asteroids extends Group implements AsteroidField {
     if (huge) {
       const radius = this.radii[index]!;
       node.whenClose(radius * FINE_BUILD, () => this.growFine(index));
+    } else {
+      // Ein Grossfelsen bekommt keine Nahstufe mehr — fertig ausgewertet.
+      shape.releaseSamples();
     }
   }
 
@@ -528,13 +554,31 @@ export class Asteroids extends Group implements AsteroidField {
    * sie.
    */
   private growFine(index: number): void {
+    if (!this.nodes[index]) return;
+    this.pending.push({
+      index,
+      build: new RockGeometryBuild(this.shapes[index]!, DETAIL_FINE),
+    });
+  }
+
+  /**
+   * Laufende Nahstufenaufbauten weiterfuehren. Genau ein Aufbau je Bild — zwei
+   * gleichzeitig waeren wieder der Hänger, den die Portionierung vermeidet.
+   */
+  private advanceBuilds(): void {
+    const job = this.pending[0];
+    if (!job) return;
+    job.build.advance(FINE_BUDGET);
+    if (!job.build.done) return;
+    this.pending.shift();
+    this.attachFine(job.index, job.build);
+  }
+
+  /** Fertige Nahstufe einhaengen. */
+  private attachFine(index: number, build: RockGeometryBuild): void {
     const node = this.nodes[index];
     if (!node) return;
-    const batch = new RockBatch(
-      buildRockGeometry(this.shapes[index]!, DETAIL_FINE),
-      this.material,
-      1,
-    );
+    const batch = new RockBatch(build.finish(), this.material, 1);
     batch.setTransform(0, _point.set(0, 0, 0), _quat.identity(), 1);
     batch.flush();
     batch.setMineral(0, this.minerals[index]!, this.shades[index]!, this.tints[index]!);
@@ -548,6 +592,10 @@ export class Asteroids extends Group implements AsteroidField {
     const first = node.levels[0];
     if (first) first.distance = this.radii[index]! * FINE_SWITCH;
     node.addLevel(batch.mesh, 0, LOD_HYSTERESIS);
+
+    // Fuer diese Form entsteht keine Geometrie mehr — der Zwischenspeicher
+    // ihrer Auswertungen sind gut 600 kB, die ab jetzt nur noch herumliegen.
+    this.shapes[index]!.releaseSamples();
   }
 
   /** Alle Plaetze in ihre Stapel schreiben (Lage und Aussehen). */
@@ -637,12 +685,17 @@ export class Asteroids extends Group implements AsteroidField {
   findShadowFocus(origin: Vector3, maxDistance: number): number {
     let best = -1;
     let bestDistance = maxDistance;
-    for (let i = 0; i < this.count; i++) {
-      if (!this.nodes[i] || this.hitpoints[i]! <= 0) continue;
-      // `positions` ist feldlokal, `origin` eine Weltkoordinate — der Versatz
-      // des Feldes gehoert also dazu (Floating Origin).
-      _probe.copy(this.positions[i]!).add(this.position);
-      const distance = Math.max(_probe.distanceTo(origin) - this.radii[i]!, 0);
+    // Nur die Plaetze mit eigener Geometrie — von 420 bleiben 33.
+    const fx = this.position.x - origin.x;
+    const fy = this.position.y - origin.y;
+    const fz = this.position.z - origin.z;
+    for (const i of this.soloIndices) {
+      if (this.hitpoints[i]! <= 0) continue;
+      const p = this.positions[i]!;
+      const dx = p.x + fx;
+      const dy = p.y + fy;
+      const dz = p.z + fz;
+      const distance = Math.max(Math.sqrt(dx * dx + dy * dy + dz * dz) - this.radii[i]!, 0);
       if (distance >= bestDistance) continue;
       bestDistance = distance;
       best = i;
@@ -654,6 +707,7 @@ export class Asteroids extends Group implements AsteroidField {
 
   /** Eigenrotation, Drift und Nachwachsen zerstoerter Brocken. */
   update(dt: number): void {
+    this.advanceBuilds();
     for (let i = 0; i < this.count; i++) {
       if (this.hitpoints[i]! <= 0) {
         this.respawn[i]! -= dt;
@@ -877,15 +931,36 @@ export class Asteroids extends Group implements AsteroidField {
     let bestIndex = -1;
     let bestRadius = 0;
 
+    // Der Vorfilter ist die groesste Schleife der Simulation: im Dauerfeuer
+    // laeuft er rund zweitausendmal je Sekunde ueber alle Plaetze — einmal je
+    // fliegendem Geschoss und Physikschritt —, und zwar fuer ein Segment von
+    // neun Metern gegen ein neun Kilometer breites Feld.
+    //
+    // Deshalb hier Komponentenarithmetik statt Vector3-Methoden: der alte
+    // Aufbau kostete je Platz drei Methodenaufrufe mit Schreibzugriffen auf
+    // einen Zwischenvektor. Gelesen wird weiterhin direkt aus `positions` —
+    // ein mitgefuehrter Zwischenspeicher waere nach dem Ruecksetzen des
+    // Ursprungs um zehn Kilometer veraltet, und das ist kein Tausch, den man
+    // fuer eine Zehntelmillisekunde eingeht.
+    const fx = this.position.x - from.x;
+    const fy = this.position.y - from.y;
+    const fz = this.position.z - from.z;
+    const dx = direction.x;
+    const dy = direction.y;
+    const dz = direction.z;
+
     for (let i = 0; i < this.count; i++) {
       if (this.hitpoints[i]! <= 0) continue;
 
-      _dir.copy(this.positions[i]!).add(this.position).sub(from);
-      const along = _dir.dot(direction);
+      const p = this.positions[i]!;
+      const rx = p.x + fx;
+      const ry = p.y + fy;
+      const rz = p.z + fz;
+      const along = rx * dx + ry * dy + rz * dz;
       const bound = this.radii[i]! * BOUND_SAFETY + padding;
       if (along < -bound || along > best + bound) continue;
 
-      const perpSq = _dir.lengthSq() - along * along;
+      const perpSq = rx * rx + ry * ry + rz * rz - along * along;
       if (perpSq > bound * bound) continue;
 
       const half = Math.sqrt(bound * bound - perpSq);

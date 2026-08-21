@@ -6,16 +6,23 @@ function positions(dust: AsteroidDust): BufferAttribute {
   return dust.geometry.getAttribute('position') as BufferAttribute;
 }
 
-/** Groesster Abstand eines Korns zur Mitte, achsenweise. */
+const _p = new Vector3();
+
+/**
+ * Groesster Abstand eines Korns zur Mitte, achsenweise. Gerechnet ueber
+ * {@link AsteroidDust.wrapped} — das Lagefeld selbst steht still, den Umschlag
+ * macht der Shader.
+ */
 function maxOffset(dust: AsteroidDust, center: Vector3): number {
-  const p = positions(dust);
+  const count = positions(dust).count;
   let worst = 0;
-  for (let i = 0; i < p.count; i++) {
+  for (let i = 0; i < count; i++) {
+    dust.wrapped(i, _p);
     worst = Math.max(
       worst,
-      Math.abs(p.getX(i) - center.x),
-      Math.abs(p.getY(i) - center.y),
-      Math.abs(p.getZ(i) - center.z),
+      Math.abs(_p.x - center.x),
+      Math.abs(_p.y - center.y),
+      Math.abs(_p.z - center.z),
     );
   }
   return worst;
@@ -51,18 +58,32 @@ describe('Feldstaub', () => {
 
   it('laesst die Koerner im Raum stehen, statt sie mitzuziehen', () => {
     const dust = new AsteroidDust({ count: 500, extent: EXTENT });
-    const before = positions(dust).array.slice();
+    const before: Vector3[] = [];
+    for (let i = 0; i < 500; i++) before.push(dust.wrapped(i, new Vector3()));
     // Ein Schritt, der kleiner ist als der halbe Wuerfel: dabei darf kein Korn
     // umgeschlagen werden, sonst waere die Parallaxe dahin — genau sie ist der
     // Grund fuer den ganzen Staub.
     dust.update(new Vector3(10, 0, 0));
-    const after = positions(dust).array;
     let moved = 0;
-    for (let i = 0; i < after.length; i++) {
-      if (Math.abs(after[i]! - before[i]!) > 1e-6) moved++;
+    for (let i = 0; i < 500; i++) {
+      if (dust.wrapped(i, _p).distanceToSquared(before[i]!) > 1e-9) moved++;
     }
     // Nur die Koerner am hinteren Rand wechseln die Seite.
-    expect(moved).toBeLessThan(after.length * 0.15);
+    expect(moved).toBeLessThan(500 * 0.15);
+  });
+
+  it('laedt das Lagefeld nicht mehr je Bild hoch', () => {
+    const dust = new AsteroidDust({ count: 500, extent: EXTENT });
+    const attribute = positions(dust);
+    // `needsUpdate` ist in Three ein reiner Setter — gelesen wird `version`,
+    // die er hochzaehlt.
+    const before = attribute.version;
+    dust.update(new Vector3(4000, -1200, 900));
+    dust.update(new Vector3(-9000, 500, 12000));
+    // Der Umschlag steht im Shader; das Attribut ist statisch. Waere das
+    // anders, gingen 84 Kilobyte je Bild zur GPU, von denen sich ein
+    // Promille aendert.
+    expect(attribute.version).toBe(before);
   });
 
   it('haelt die Korngroesse in Metern, nicht in Bildpunkten', () => {

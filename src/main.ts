@@ -54,7 +54,13 @@ const renderer = new WebGLRenderer({
   // und macht damit jede Tiefenrekonstruktion im Schirmraum unmoeglich (GTAO).
   // Die Tiefenspanne loest stattdessen der zweigeteilte Renderpfad, siehe
   // render/Postprocessing.ts.
-  antialias: true,
+  //
+  // `antialias` bleibt aus: auf den Standard-Framebuffer wird ueberhaupt nur
+  // noch der Vollbild-Rechteck des OutputPass gezeichnet — dort gibt es keine
+  // Geometriekante mehr zu glaetten. Die Glaettung macht das multisampelte
+  // Zwischenziel des Composers. Ein wahrer Wert legte hier nur einen zweiten,
+  // nie benutzten Multisample-Puffer in Bildgroesse an.
+  antialias: false,
   powerPreference: 'high-performance',
 });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -455,10 +461,16 @@ function fixedUpdate(dt: number): void {
   if (impact) shake.add(0.25 + impact.damage * 3);
   // Schadensmodell: Treffer auf die Subsysteme verteilen, Luft mitfuehren.
   damage.fixedUpdate(dt, impact);
-  effects.update(dt);
-  mining.update(dt, targeting.getIndex(), ship.position); // --- Bergbau ---
   applyFloatingOrigin();
 }
+
+// `effects.update` und `mining.update` standen hier einmal auch. Beide sind
+// aber reine Darstellung: die Rauchfahnen bewegen sich linear und werden erst
+// beim Zeichnen abgelesen, und der Bergbau bucht in Klumpen von einer halben
+// Tonne — der Kommentar in MiningSystem begruendet die Portionierung selbst
+// damit, dass der Laderaum nicht 120-mal je Sekunde neu entstehen soll. Mit
+// 120 Hz lief beides doppelt so oft wie noetig, der Bergbau zusaetzlich mit
+// einer Sichtlinienpruefung durchs ganze Feld. Sie stehen jetzt in `render`.
 
 function render(dt: number): void {
   asteroids.update(dt);
@@ -479,6 +491,11 @@ function render(dt: number): void {
     flight.velocity,
     weapons.getParams().boltSpeed,
   );
+  // --- Bergbau --- Nach der Zielerfassung: so arbeitet der Scanner mit dem
+  // Ziel *dieses* Bildes statt mit dem des vorigen.
+  mining.update(dt, targeting.getIndex(), ship.position);
+  effects.update(dt);
+
   radar.update(dt, {
     origin: ship.position,
     orientation: ship.quaternion,

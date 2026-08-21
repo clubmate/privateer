@@ -167,9 +167,15 @@ export class Annunciator {
     const oxygenText = Number.isFinite(seconds) ? formatClock(seconds) : 'OK';
     const statuses = SYSTEM_DEFINITIONS.map((def) => systems.getStatus(def.id));
 
+    // Der Blinktakt gehoert nur dann in die Signatur, wenn ueberhaupt etwas
+    // blinkt. Sonst wechselt sie viermal je Sekunde, die Tafel wird neu
+    // gezeichnet und hochgeladen — fuer acht Zahlen, die sich minutenlang
+    // nicht ruehren. Bei echtem Ausfall bleibt das Blinken unveraendert.
+    const anyFailed = statuses.some((status) => status === 'failed');
+
     // Neu zeichnen nur bei echter Aenderung: sonst laeuft in jedem Frame ein
     // Canvas-Upload mit, fuer ein Bild, das sich nicht bewegt.
-    const signature = `${statuses.join('')}|${oxygenText}|${blink}`;
+    const signature = `${statuses.join('')}|${oxygenText}|${anyFailed && blink}`;
     if (signature === this.signature) return;
     this.signature = signature;
 

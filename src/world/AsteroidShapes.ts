@@ -41,70 +41,101 @@ const SPHERES = new Map<number, Sphere>();
  * Icosphere mit Index. Eigene Erzeugung statt `IcosahedronGeometry`, weil wir
  * geteilte Vertices brauchen: die Deformation soll die Flaechen nicht
  * aufreissen, und geglaettete Normalen entstehen nur ueber den Index.
+ *
+ * **Jede Stufe ist ein Praefix der naechsten.** Die Unterteilung haengt neue
+ * Mittelpunkte hinten an und laesst die vorhandenen Richtungen unberuehrt —
+ * `icosphere(5).dirs` steht also Zahl fuer Zahl am Anfang von
+ * `icosphere(6).dirs`. Darauf beruht der Zwischenspeicher in
+ * {@link RockShape.samples}: eine Form, die fuer die grobe Stufe schon
+ * ausgewertet wurde, muss fuer die feine nur noch die *neuen* Richtungen
+ * rechnen. Deshalb wird Stufe `n` auch aus der gespeicherten Stufe `n-1`
+ * weiterunterteilt statt jedes Mal vom Ikosaeder an.
  */
 export function icosphere(detail: number): Sphere {
   const cached = SPHERES.get(detail);
   if (cached) return cached;
-
-  const t = (1 + Math.sqrt(5)) / 2;
-  const verts: number[][] = [
-    [-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0],
-    [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t],
-    [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1],
-  ].map((v) => {
-    const l = Math.hypot(v[0]!, v[1]!, v[2]!);
-    return [v[0]! / l, v[1]! / l, v[2]! / l];
-  });
-  let faces: number[][] = [
-    [0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
-    [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
-    [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
-    [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1],
-  ];
-
-  for (let level = 0; level < detail; level++) {
-    const cache = new Map<number, number>();
-    const next: number[][] = [];
-    const mid = (a: number, b: number): number => {
-      const key = a < b ? a * 100000 + b : b * 100000 + a;
-      const hit = cache.get(key);
-      if (hit !== undefined) return hit;
-      const va = verts[a]!;
-      const vb = verts[b]!;
-      const x = va[0]! + vb[0]!;
-      const y = va[1]! + vb[1]!;
-      const z = va[2]! + vb[2]!;
-      const l = Math.hypot(x, y, z);
-      verts.push([x / l, y / l, z / l]);
-      const index = verts.length - 1;
-      cache.set(key, index);
-      return index;
-    };
-    for (const f of faces) {
-      const a = mid(f[0]!, f[1]!);
-      const b = mid(f[1]!, f[2]!);
-      const c = mid(f[2]!, f[0]!);
-      next.push([f[0]!, a, c], [a, f[1]!, b], [c, b, f[2]!], [a, b, c]);
-    }
-    faces = next;
-  }
-
-  const dirs = new Float32Array(verts.length * 3);
-  for (let i = 0; i < verts.length; i++) {
-    dirs[i * 3] = verts[i]![0]!;
-    dirs[i * 3 + 1] = verts[i]![1]!;
-    dirs[i * 3 + 2] = verts[i]![2]!;
-  }
-  const index = new Uint32Array(faces.length * 3);
-  for (let i = 0; i < faces.length; i++) {
-    index[i * 3] = faces[i]![0]!;
-    index[i * 3 + 1] = faces[i]![1]!;
-    index[i * 3 + 2] = faces[i]![2]!;
-  }
-
-  const sphere: Sphere = { dirs, index };
+  const sphere = detail <= 0 ? baseIcosahedron() : subdivide(icosphere(detail - 1));
   SPHERES.set(detail, sphere);
   return sphere;
+}
+
+/** Das Ikosaeder, auf die Einheitskugel normiert. */
+function baseIcosahedron(): Sphere {
+  const t = (1 + Math.sqrt(5)) / 2;
+  const raw = [
+    -1, t, 0, 1, t, 0, -1, -t, 0, 1, -t, 0,
+    0, -1, t, 0, 1, t, 0, -1, -t, 0, 1, -t,
+    t, 0, -1, t, 0, 1, -t, 0, -1, -t, 0, 1,
+  ];
+  const dirs = new Float32Array(raw.length);
+  for (let i = 0; i < raw.length; i += 3) {
+    const l = Math.hypot(raw[i]!, raw[i + 1]!, raw[i + 2]!);
+    dirs[i] = raw[i]! / l;
+    dirs[i + 1] = raw[i + 1]! / l;
+    dirs[i + 2] = raw[i + 2]! / l;
+  }
+  const index = Uint32Array.from([
+    0, 11, 5, 0, 5, 1, 0, 1, 7, 0, 7, 10, 0, 10, 11,
+    1, 5, 9, 5, 11, 4, 11, 10, 2, 10, 7, 6, 7, 1, 8,
+    3, 9, 4, 3, 4, 2, 3, 2, 6, 3, 6, 8, 3, 8, 9,
+    4, 9, 5, 2, 4, 11, 6, 2, 10, 8, 6, 7, 9, 8, 1,
+  ]);
+  return { dirs, index };
+}
+
+/**
+ * Eine Stufe unterteilen: jedes Dreieck in vier, jede Kante genau einen neuen
+ * Mittelpunkt.
+ *
+ * Gerechnet wird durchgehend auf typisierten Feldern. Die frueher benutzten
+ * verschachtelten Zahlenfelder erzeugten fuer Stufe 6 rund 150.000
+ * kurzlebige Dreielement-Felder — die Zeit steckte weniger im Rechnen als im
+ * anschliessenden Aufraeumen.
+ */
+function subdivide(base: Sphere): Sphere {
+  const faceCount = base.index.length / 3;
+  const oldPoints = base.dirs.length / 3;
+  // Euler: jede Kante liefert genau einen neuen Punkt, und ein geschlossenes
+  // Dreiecksnetz hat 3F/2 Kanten. Damit steht die Groesse vorab fest.
+  const newPoints = oldPoints + (faceCount * 3) / 2;
+  const dirs = new Float32Array(newPoints * 3);
+  dirs.set(base.dirs);
+  const index = new Uint32Array(faceCount * 4 * 3);
+
+  const midpoints = new Map<number, number>();
+  let next = oldPoints;
+
+  const mid = (a: number, b: number): number => {
+    const key = a < b ? a * 0x100000 + b : b * 0x100000 + a;
+    const hit = midpoints.get(key);
+    if (hit !== undefined) return hit;
+    const x = dirs[a * 3]! + dirs[b * 3]!;
+    const y = dirs[a * 3 + 1]! + dirs[b * 3 + 1]!;
+    const z = dirs[a * 3 + 2]! + dirs[b * 3 + 2]!;
+    const l = Math.hypot(x, y, z);
+    const at = next++;
+    dirs[at * 3] = x / l;
+    dirs[at * 3 + 1] = y / l;
+    dirs[at * 3 + 2] = z / l;
+    midpoints.set(key, at);
+    return at;
+  };
+
+  let out = 0;
+  for (let f = 0; f < faceCount; f++) {
+    const v0 = base.index[f * 3]!;
+    const v1 = base.index[f * 3 + 1]!;
+    const v2 = base.index[f * 3 + 2]!;
+    const a = mid(v0, v1);
+    const b = mid(v1, v2);
+    const c = mid(v2, v0);
+    index[out++] = v0; index[out++] = a; index[out++] = c;
+    index[out++] = a; index[out++] = v1; index[out++] = b;
+    index[out++] = c; index[out++] = b; index[out++] = v2;
+    index[out++] = a; index[out++] = b; index[out++] = c;
+  }
+
+  return { dirs, index };
 }
 
 /**
@@ -369,15 +400,8 @@ export class RockShape {
    * Schutt: dunkler, stumpfer, ohne freiliegende Adern.
    */
   cavity(x: number, y: number, z: number): number {
-    let sum = 0;
-    for (let i = 0; i < this.craterCount; i++) {
-      const c = x * this.craterDir[i * 3]! + y * this.craterDir[i * 3 + 1]! + z * this.craterDir[i * 3 + 2]!;
-      const cos = this.craterCos[i]!;
-      if (c <= cos) continue;
-      const t = (1 - c) / (1 - cos);
-      sum += (1 - t * t) * (this.craterDepth[i]! / 0.12);
-    }
-    return Math.min(sum, 1);
+    this.craterPair(x, y, z);
+    return this.lastCavity;
   }
 
   /**
@@ -390,23 +414,100 @@ export class RockShape {
    * 400-m-Brocken feiner als ein Dreieck.
    */
   ejecta(x: number, y: number, z: number): number {
-    let sum = 0;
+    this.craterPair(x, y, z);
+    return this.lastEjecta;
+  }
+
+  /**
+   * Mulde und Auswurf in *einem* Durchlauf ueber die Kraterliste.
+   *
+   * Beide Groessen brauchen dasselbe Skalarprodukt je Krater und dieselbe
+   * Fallunterscheidung; getrennt gerechnet lief die Liste zweimal. Auf einem
+   * Planetoiden mit 22 Kratern und 40.962 Richtungen waren das 900.000
+   * ueberfluessige Skalarprodukte je Aufbau. Die Ergebnisse sind Zahl fuer
+   * Zahl dieselben wie aus {@link cavity} und {@link ejecta}.
+   */
+  private craterPair(x: number, y: number, z: number): void {
+    let cavity = 0;
+    let ejecta = 0;
     for (let i = 0; i < this.craterCount; i++) {
       const c = x * this.craterDir[i * 3]! + y * this.craterDir[i * 3 + 1]! + z * this.craterDir[i * 3 + 2]!;
       const cos = this.craterCos[i]!;
       const outer = 1 - (1 - cos) * EJECTA_REACH;
       if (c <= outer) continue;
       const t = (1 - c) / (1 - cos);
-      if (t < 1) continue;
+      if (t < 1) {
+        if (c > cos) cavity += (1 - t * t) * (this.craterDepth[i]! / 0.12);
+        continue;
+      }
       const u = (t - 1) / (EJECTA_REACH - 1);
       const falloff = 1 - u;
       // Nenner deutlich groesser als bei {@link cavity}: der Hof ist eine
       // Andeutung. Bei 0,12 sattelt schon ein einzelner grosser Krater bei 1,
       // die Hoefe der Nachbarn ueberlagern sich zu einer geschlossenen Decke,
       // und der Brocken sieht aus, als haette jemand Nebel darauf gemalt.
-      sum += falloff * falloff * (this.craterDepth[i]! / 0.30);
+      ejecta += falloff * falloff * (this.craterDepth[i]! / 0.30);
     }
-    return Math.min(sum, 1);
+    this.lastCavity = Math.min(cavity, 1);
+    this.lastEjecta = Math.min(ejecta, 1);
+  }
+
+  private lastCavity = 0;
+  private lastEjecta = 0;
+
+  /**
+   * Zwischengespeicherte Auswertungen je Richtungsindex der Icosphere:
+   * Radius, Mulde, Fleckigkeit, Auswurf.
+   *
+   * **Warum das traegt:** jede Detailstufe ist ein Praefix der naechsten
+   * (siehe {@link icosphere}). Ein Planetoid wird nacheinander in Stufe 5,
+   * 3 und 6 gebaut, dazu kommt die Vermessung auf Stufe 4 — dieselbe Form
+   * also an 2.562 + 10.242 + 642 + 40.962 Richtungen, von denen nur 40.962
+   * verschieden sind. Ein Viertel der Arbeit war schlicht doppelt.
+   */
+  private samples: Float32Array | null = null;
+  private sampleCount = 0;
+
+  /**
+   * Die ersten `count` Richtungen auswerten, hoechstens `budget` neue je
+   * Aufruf. Liefert, wie viele fertig sind — der Aufrufer kann den Aufbau
+   * damit ueber mehrere Bilder strecken.
+   */
+  sampleUpTo(dirs: Float32Array, count: number, budget: number): number {
+    if (this.sampleCount >= count) return count;
+    if (!this.samples || this.samples.length < count * 4) {
+      const grown = new Float32Array(count * 4);
+      if (this.samples) grown.set(this.samples.subarray(0, this.sampleCount * 4));
+      this.samples = grown;
+    }
+    const samples = this.samples;
+    const end = Math.min(count, this.sampleCount + budget);
+    for (let i = this.sampleCount; i < end; i++) {
+      const x = dirs[i * 3]!;
+      const y = dirs[i * 3 + 1]!;
+      const z = dirs[i * 3 + 2]!;
+      this.craterPair(x, y, z);
+      samples[i * 4] = this.radius(x, y, z);
+      samples[i * 4 + 1] = this.lastCavity;
+      samples[i * 4 + 2] = this.mottle(x, y, z);
+      samples[i * 4 + 3] = this.lastEjecta;
+    }
+    this.sampleCount = end;
+    return end;
+  }
+
+  /** Die zwischengespeicherten Werte. Nur bis `sampleUpTo` gefuellt. */
+  get sampleData(): Float32Array {
+    return this.samples ?? new Float32Array(0);
+  }
+
+  /**
+   * Zwischenspeicher freigeben. Aufzurufen, wenn fuer diese Form keine
+   * Geometrie mehr entsteht — bei einem Planetoiden sind das gut 600 kB.
+   */
+  releaseSamples(): void {
+    this.samples = null;
+    this.sampleCount = 0;
   }
 
   /** Unnormierter Radius. */
@@ -517,47 +618,172 @@ export class RockShape {
 
 /**
  * Mesh zu einer Form. `detail` ist die Zahl der Unterteilungen (2 = 320
- * Dreiecke, 3 = 1280, 4 = 5120, 5 = 20480).
+ * Dreiecke, 3 = 1280, 4 = 5120, 5 = 20480, 6 = 81920).
  *
  * Neben Position und Normale traegt die Geometrie `aRockDetail`: Muldentiefe,
  * Fleckigkeit und Auswurfdecke. Alle drei gehoeren zur *Form* und wechseln
- * nicht mit dem Inhalt. Die Adern dagegen rechnet der Shader je Bildpunkt — auf einem
- * Brocken mit 320 Dreiecken waeren sie sonst Polygonflecken.
+ * nicht mit dem Inhalt. Die Adern dagegen rechnet der Shader je Bildpunkt —
+ * auf einem Brocken mit 320 Dreiecken waeren sie sonst Polygonflecken.
  */
 export function buildRockGeometry(shape: RockShape, detail: number): BufferGeometry {
-  const { dirs, index } = icosphere(detail);
-  const points = dirs.length / 3;
-  const position = new Float32Array(dirs.length);
-  const rockDetail = new Float32Array(points * 3);
+  const build = new RockGeometryBuild(shape, detail);
+  build.advance(Infinity);
+  return build.finish();
+}
 
-  for (let i = 0; i < points; i++) {
-    const x = dirs[i * 3]!;
-    const y = dirs[i * 3 + 1]!;
-    const z = dirs[i * 3 + 2]!;
-    const r = shape.radius(x, y, z);
-    position[i * 3] = x * r;
-    position[i * 3 + 1] = y * r;
-    position[i * 3 + 2] = z * r;
-    rockDetail[i * 3] = shape.cavity(x, y, z);
-    rockDetail[i * 3 + 1] = shape.mottle(x, y, z);
-    rockDetail[i * 3 + 2] = shape.ejecta(x, y, z);
+/**
+ * Derselbe Aufbau, aber in Portionen.
+ *
+ * **Wozu:** die feinste Stufe eines Planetoiden hat 40.962 Punkte und 81.920
+ * Dreiecke. In einem Stueck gerechnet sind das gut vierzig Millisekunden —
+ * zweieinhalb ausgelassene Bilder, genau in dem Moment, in dem man auf den
+ * Brocken zufliegt. Der Aufbau beginnt aber beim 3,2-fachen Radius, gezeigt
+ * wird die Stufe erst beim 1,7-fachen: dazwischen liegen mehrere hundert
+ * Meter Anflug, also reichlich Bilder, um die Arbeit zu verteilen.
+ *
+ * Das Ergebnis ist Zahl fuer Zahl dasselbe wie beim Bau am Stueck — die
+ * Portionierung aendert nur, wann gerechnet wird.
+ */
+export class RockGeometryBuild {
+  private readonly sphere: Sphere;
+  private readonly points: number;
+  private readonly position: Float32Array;
+  private readonly rockDetail: Float32Array;
+  private readonly normal: Float32Array;
+  /** 0 = abtasten, 1 = Normalen haeufen, 2 = normieren, 3 = fertig. */
+  private phase = 0;
+  private cursor = 0;
+
+  constructor(
+    private readonly shape: RockShape,
+    private readonly detail: number,
+  ) {
+    this.sphere = icosphere(detail);
+    this.points = this.sphere.dirs.length / 3;
+    this.position = new Float32Array(this.points * 3);
+    this.rockDetail = new Float32Array(this.points * 3);
+    this.normal = new Float32Array(this.points * 3);
   }
 
-  let geometry = new BufferGeometry();
-  geometry.setAttribute('position', new BufferAttribute(position, 3));
-  geometry.setAttribute('aRockDetail', new BufferAttribute(rockDetail, 3));
-  geometry.setIndex(new BufferAttribute(index, 1));
-
-  // Flach schattiert wird nur das Kleinzeug. Bei einem Grossbrocken mit
-  // 20.000 Dreiecken ist ein Dreieck 14 m breit — jede Facette bekaeme ihre
-  // eigene Helligkeit, und der Planetoid saehe aus wie zerknuelltes Papier.
-  // Seine Kanten kommen dort von den Bruchflaechen, nicht von der Aufloesung.
-  if (shape.sharp && detail <= 3) {
-    const flat = geometry.toNonIndexed();
-    geometry.dispose();
-    geometry = flat;
+  get done(): boolean {
+    return this.phase === 3;
   }
-  geometry.computeVertexNormals();
-  geometry.computeBoundingSphere();
-  return geometry;
+
+  /**
+   * Ein Stueck Arbeit erledigen. `budget` zaehlt Punkte bzw. Dreiecke —
+   * `Infinity` baut in einem Zug.
+   */
+  advance(budget: number): void {
+    let left = budget;
+    while (left > 0 && this.phase < 3) {
+      if (this.phase === 0) left -= this.sample(left);
+      else if (this.phase === 1) left -= this.accumulate(left);
+      else left -= this.normalize(left);
+    }
+  }
+
+  /** Fertige Geometrie. Erst aufrufen, wenn {@link done}. */
+  finish(): BufferGeometry {
+    if (!this.done) this.advance(Infinity);
+    let geometry = new BufferGeometry();
+    geometry.setAttribute('position', new BufferAttribute(this.position, 3));
+    geometry.setAttribute('aRockDetail', new BufferAttribute(this.rockDetail, 3));
+    geometry.setAttribute('normal', new BufferAttribute(this.normal, 3));
+    geometry.setIndex(new BufferAttribute(this.sphere.index, 1));
+
+    // Flach schattiert wird nur das Kleinzeug. Bei einem Grossbrocken mit
+    // 20.000 Dreiecken ist ein Dreieck 14 m breit — jede Facette bekaeme ihre
+    // eigene Helligkeit, und der Planetoid saehe aus wie zerknuelltes Papier.
+    // Seine Kanten kommen dort von den Bruchflaechen, nicht von der Aufloesung.
+    if (this.shape.sharp && this.detail <= 3) {
+      const flat = geometry.toNonIndexed();
+      geometry.dispose();
+      geometry = flat;
+      // Nach dem Aufloesen des Index gehoert zu jeder Facette ihre eigene
+      // Normale — die geglaetteten von oben waeren dort falsch.
+      geometry.computeVertexNormals();
+    }
+    geometry.computeBoundingSphere();
+    return geometry;
+  }
+
+  /** Punkte auf die Oberflaeche setzen. */
+  private sample(budget: number): number {
+    const before = this.shape.sampleUpTo(this.sphere.dirs, this.points, budget);
+    const dirs = this.sphere.dirs;
+    const data = this.shape.sampleData;
+    for (let i = this.cursor; i < before; i++) {
+      const r = data[i * 4]!;
+      this.position[i * 3] = dirs[i * 3]! * r;
+      this.position[i * 3 + 1] = dirs[i * 3 + 1]! * r;
+      this.position[i * 3 + 2] = dirs[i * 3 + 2]! * r;
+      this.rockDetail[i * 3] = data[i * 4 + 1]!;
+      this.rockDetail[i * 3 + 1] = data[i * 4 + 2]!;
+      this.rockDetail[i * 3 + 2] = data[i * 4 + 3]!;
+    }
+    const did = before - this.cursor;
+    this.cursor = before;
+    if (this.cursor >= this.points) {
+      this.phase = 1;
+      this.cursor = 0;
+    }
+    // Auch ein Durchlauf ohne neue Abtastung (alles im Zwischenspeicher) darf
+    // die Schleife nicht anhalten.
+    return Math.max(did, 1);
+  }
+
+  /**
+   * Flaechennormalen auf die Ecken haeufen — dieselbe Rechnung wie
+   * `BufferGeometry.computeVertexNormals`, aber direkt auf den typisierten
+   * Feldern und in derselben Reihenfolge.
+   */
+  private accumulate(budget: number): number {
+    const index = this.sphere.index;
+    const faces = index.length / 3;
+    const end = Math.min(faces, this.cursor + budget);
+    const pos = this.position;
+    const nrm = this.normal;
+    for (let f = this.cursor; f < end; f++) {
+      const a = index[f * 3]! * 3;
+      const b = index[f * 3 + 1]! * 3;
+      const c = index[f * 3 + 2]! * 3;
+      const abx = pos[b]! - pos[a]!;
+      const aby = pos[b + 1]! - pos[a + 1]!;
+      const abz = pos[b + 2]! - pos[a + 2]!;
+      const acx = pos[c]! - pos[a]!;
+      const acy = pos[c + 1]! - pos[a + 1]!;
+      const acz = pos[c + 2]! - pos[a + 2]!;
+      const nx = aby * acz - abz * acy;
+      const ny = abz * acx - abx * acz;
+      const nz = abx * acy - aby * acx;
+      nrm[a] += nx; nrm[a + 1] += ny; nrm[a + 2] += nz;
+      nrm[b] += nx; nrm[b + 1] += ny; nrm[b + 2] += nz;
+      nrm[c] += nx; nrm[c + 1] += ny; nrm[c + 2] += nz;
+    }
+    const did = end - this.cursor;
+    this.cursor = end;
+    if (this.cursor >= faces) {
+      this.phase = 2;
+      this.cursor = 0;
+    }
+    return Math.max(did, 1);
+  }
+
+  private normalize(budget: number): number {
+    const end = Math.min(this.points, this.cursor + budget);
+    const nrm = this.normal;
+    for (let i = this.cursor; i < end; i++) {
+      const x = nrm[i * 3]!;
+      const y = nrm[i * 3 + 1]!;
+      const z = nrm[i * 3 + 2]!;
+      const l = Math.sqrt(x * x + y * y + z * z) || 1;
+      nrm[i * 3] = x / l;
+      nrm[i * 3 + 1] = y / l;
+      nrm[i * 3 + 2] = z / l;
+    }
+    const did = end - this.cursor;
+    this.cursor = end;
+    if (this.cursor >= this.points) this.phase = 3;
+    return Math.max(did, 1);
+  }
 }

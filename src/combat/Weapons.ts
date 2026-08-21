@@ -180,8 +180,11 @@ export class Weapons {
       const bolt = this.bolts[i]!;
       if (bolt.remaining <= 0) continue;
 
-      const step = bolt.velocity.length() * dt;
-      _dir.copy(bolt.velocity).divideScalar(Math.max(bolt.velocity.length(), 1e-6));
+      // Einmal die Wurzel, nicht zweimal: bei bis zu 17 fliegenden Geschossen
+      // und 120 Schritten je Sekunde sind das 2000 gesparte Wurzeln je Sekunde.
+      const speed = bolt.velocity.length();
+      const step = speed * dt;
+      _dir.copy(bolt.velocity).divideScalar(Math.max(speed, 1e-6));
 
       const hit = this.asteroids.hitSegment(bolt.position, _dir, step);
       if (hit) {
@@ -227,8 +230,15 @@ export class Weapons {
     const port = this.params.ports[this.nextPort % this.getActiveGuns()]!;
     this.nextPort++;
 
-    ship.updateMatrixWorld();
-    _muzzle.set(port[0], port[1], port[2]).applyMatrix4(ship.matrixWorld);
+    // Kein `ship.updateMatrixWorld()`: Three rekursiert dabei ueber den
+    // *ganzen* Teilbaum — Innenraum-GLB, Aussenrumpf, Kanzelanzeige,
+    // Frachtkisten, Kamera —, und zwar unabhaengig davon, ob sich etwas
+    // geaendert hat. Die Muendung haengt starr am Schiff, ihre Weltlage ergibt
+    // sich also direkt aus Lage und Drehung des Rigs. Ergebnis identisch.
+    _muzzle
+      .set(port[0], port[1], port[2])
+      .applyQuaternion(ship.quaternion)
+      .add(ship.position);
 
     // Zielpunkt auf der Nase in Konvergenzentfernung; beide Kanonen zielen
     // dorthin, damit die Schuesse am Fadenkreuz zusammenlaufen.

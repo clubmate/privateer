@@ -143,11 +143,15 @@ export class Hud {
   /** Interaktions-Prompt einblenden, z. B. "F — Aufstehen". */
   showPrompt(text: string): void {
     if (this.prompt.textContent !== text) this.prompt.textContent = text;
-    this.prompt.hidden = false;
+    // Auch `hidden` nur bei echtem Wechsel: `PlayerState` ruft das je Bild,
+    // solange der Spieler sitzt, und jede Zuweisung stoesst den Browser in
+    // Layout und Neuzeichnung. Es war die einzige ungeprueft geschriebene
+    // DOM-Eigenschaft im Flugbetrieb.
+    if (this.prompt.hidden) this.prompt.hidden = false;
   }
 
   hidePrompt(): void {
-    this.prompt.hidden = true;
+    if (!this.prompt.hidden) this.prompt.hidden = true;
   }
 
   /** Flache Hilfsanzeige (H). */
