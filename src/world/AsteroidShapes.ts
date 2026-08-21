@@ -107,6 +107,14 @@ export function icosphere(detail: number): Sphere {
   return sphere;
 }
 
+/**
+ * Wie weit die Auswurfdecke ueber den Kraterrand hinausreicht, als Vielfaches
+ * der Kraterweite. Ein echter Einschlag wirft Material ringfoermig aus; es
+ * liegt am Rand am dichtesten und duennt nach aussen aus. Ohne diesen Hof
+ * bleibt ein Krater eine Delle — mit ihm liest er sich als Einschlag.
+ */
+const EJECTA_REACH = 1.85;
+
 /** Weiche Vereinigung zweier Radien — laesst am Hals eine Kehle stehen. */
 function smoothMax(a: number, b: number, k: number): number {
   const h = Math.max(k - Math.abs(a - b), 0) / k;
@@ -372,6 +380,35 @@ export class RockShape {
     return Math.min(sum, 1);
   }
 
+  /**
+   * Dichte der Auswurfdecke (0..1) rund um einen Einschlag. Beginnt am
+   * Kraterrand und duennt nach aussen aus; innerhalb der Schuessel ist sie
+   * null — dort liegt der Auswurf ja gerade nicht mehr.
+   *
+   * Bewusst nur eine Helligkeitsgroesse und keine Verformung: Auswurf ist
+   * eine duenne Staubdecke, keine Gelaendestufe. Als Form waere sie auf einem
+   * 400-m-Brocken feiner als ein Dreieck.
+   */
+  ejecta(x: number, y: number, z: number): number {
+    let sum = 0;
+    for (let i = 0; i < this.craterCount; i++) {
+      const c = x * this.craterDir[i * 3]! + y * this.craterDir[i * 3 + 1]! + z * this.craterDir[i * 3 + 2]!;
+      const cos = this.craterCos[i]!;
+      const outer = 1 - (1 - cos) * EJECTA_REACH;
+      if (c <= outer) continue;
+      const t = (1 - c) / (1 - cos);
+      if (t < 1) continue;
+      const u = (t - 1) / (EJECTA_REACH - 1);
+      const falloff = 1 - u;
+      // Nenner deutlich groesser als bei {@link cavity}: der Hof ist eine
+      // Andeutung. Bei 0,12 sattelt schon ein einzelner grosser Krater bei 1,
+      // die Hoefe der Nachbarn ueberlagern sich zu einer geschlossenen Decke,
+      // und der Brocken sieht aus, als haette jemand Nebel darauf gemalt.
+      sum += falloff * falloff * (this.craterDepth[i]! / 0.30);
+    }
+    return Math.min(sum, 1);
+  }
+
   /** Unnormierter Radius. */
   private raw(x: number, y: number, z: number): number {
     let r: number;
@@ -482,16 +519,16 @@ export class RockShape {
  * Mesh zu einer Form. `detail` ist die Zahl der Unterteilungen (2 = 320
  * Dreiecke, 3 = 1280, 4 = 5120, 5 = 20480).
  *
- * Neben Position und Normale traegt die Geometrie `aRockDetail`: Muldentiefe
- * und Fleckigkeit. Beides gehoert zur *Form* und wechselt nicht mit dem
- * Inhalt. Die Adern dagegen rechnet der Shader je Bildpunkt — auf einem
+ * Neben Position und Normale traegt die Geometrie `aRockDetail`: Muldentiefe,
+ * Fleckigkeit und Auswurfdecke. Alle drei gehoeren zur *Form* und wechseln
+ * nicht mit dem Inhalt. Die Adern dagegen rechnet der Shader je Bildpunkt — auf einem
  * Brocken mit 320 Dreiecken waeren sie sonst Polygonflecken.
  */
 export function buildRockGeometry(shape: RockShape, detail: number): BufferGeometry {
   const { dirs, index } = icosphere(detail);
   const points = dirs.length / 3;
   const position = new Float32Array(dirs.length);
-  const rockDetail = new Float32Array(points * 2);
+  const rockDetail = new Float32Array(points * 3);
 
   for (let i = 0; i < points; i++) {
     const x = dirs[i * 3]!;
@@ -501,13 +538,14 @@ export function buildRockGeometry(shape: RockShape, detail: number): BufferGeome
     position[i * 3] = x * r;
     position[i * 3 + 1] = y * r;
     position[i * 3 + 2] = z * r;
-    rockDetail[i * 2] = shape.cavity(x, y, z);
-    rockDetail[i * 2 + 1] = shape.mottle(x, y, z);
+    rockDetail[i * 3] = shape.cavity(x, y, z);
+    rockDetail[i * 3 + 1] = shape.mottle(x, y, z);
+    rockDetail[i * 3 + 2] = shape.ejecta(x, y, z);
   }
 
   let geometry = new BufferGeometry();
   geometry.setAttribute('position', new BufferAttribute(position, 3));
-  geometry.setAttribute('aRockDetail', new BufferAttribute(rockDetail, 2));
+  geometry.setAttribute('aRockDetail', new BufferAttribute(rockDetail, 3));
   geometry.setIndex(new BufferAttribute(index, 1));
 
   // Flach schattiert wird nur das Kleinzeug. Bei einem Grossbrocken mit

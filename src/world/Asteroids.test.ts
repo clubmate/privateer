@@ -332,11 +332,36 @@ describe('Asteroiden — Formen', () => {
       const centroid = a.clone().add(b).add(c).divideScalar(3);
       expect(normal.dot(centroid)).toBeGreaterThan(0);
     }
-    // Mulden und Fleckigkeit liegen als Attribut bereit (die Adern rechnet
-    // der Shader je Bildpunkt).
+    // Mulden, Fleckigkeit und Auswurfdecke liegen als Attribut bereit (die
+    // Adern rechnet der Shader je Bildpunkt).
     const detail = geometry.attributes['aRockDetail']!;
-    expect(detail.itemSize).toBe(2);
+    expect(detail.itemSize).toBe(3);
     expect(detail.count).toBe(position.count);
+  });
+
+  it('legt den Auswurf um den Krater, nicht hinein', () => {
+    for (const archetype of ARCHETYPES) {
+      const shape = new RockShape(archetype, 5);
+      let maxEjecta = 0;
+      let maxCavity = -1;
+      let deepest = new Vector3(1, 0, 0);
+      for (const d of directions(1200)) {
+        const ejecta = shape.ejecta(d.x, d.y, d.z);
+        expect(ejecta).toBeGreaterThanOrEqual(0);
+        expect(ejecta).toBeLessThanOrEqual(1);
+        if (ejecta > maxEjecta) maxEjecta = ejecta;
+        const cavity = shape.cavity(d.x, d.y, d.z);
+        if (cavity > maxCavity) {
+          maxCavity = cavity;
+          deepest = d;
+        }
+      }
+      // Jede Familie hat Krater, also hat jede irgendwo einen Hof.
+      expect(maxEjecta).toBeGreaterThan(0);
+      // Und am tiefsten Punkt einer Schuessel liegt kein Auswurf: dort ist das
+      // Material ja gerade weggeschlagen worden.
+      expect(shape.ejecta(deepest.x, deepest.y, deepest.z)).toBe(0);
+    }
   });
 
   it('schattiert frische Bruchkanten flach und Rundlinge glatt', () => {
@@ -598,5 +623,67 @@ describe('Asteroidenfeld — Detailstufen', () => {
     expect(field.isAlive(index)).toBe(true);
     const last = lod.levels[lod.levels.length - 1]!;
     expect(last.distance).toBeCloseTo(field.getRadius(index) * 8, 3);
+  });
+});
+
+describe('Asteroidenfeld — Schattenfokus', () => {
+  /** Feld aus lauter Grossbrocken: nur die haben eigene Geometrie. */
+  function bigField(): Asteroids {
+    return new Asteroids({
+      count: 8,
+      innerRadius: 300,
+      outerRadius: 1800,
+      minRadius: 60,
+      maxRadius: 150,
+      seed: 77,
+    });
+  }
+
+  it('waehlt den naechsten Grossbrocken', () => {
+    const asteroids = bigField();
+    const origin = new Vector3(0, 0, 0);
+    const index = asteroids.findShadowFocus(origin, 1e9);
+    expect(index).toBeGreaterThanOrEqual(0);
+
+    // Es darf keinen geben, der naeher an der Oberflaeche liegt.
+    const center = new Vector3();
+    asteroids.getCenter(index, center);
+    const best = center.distanceTo(origin) - asteroids.getRadius(index);
+    for (let i = 0; i < asteroids.count; i++) {
+      asteroids.getCenter(i, center);
+      const distance = center.distanceTo(origin) - asteroids.getRadius(i);
+      if (asteroids.getSizeClass(i) === 'large' || asteroids.getSizeClass(i) === 'huge') {
+        expect(distance).toBeGreaterThanOrEqual(best - 1e-6);
+      }
+    }
+  });
+
+  it('meldet nichts, wenn keiner nah genug ist', () => {
+    const asteroids = bigField();
+    expect(asteroids.findShadowFocus(new Vector3(0, 0, 0), 1)).toBe(-1);
+  });
+
+  it('rechnet im Weltraum, nicht im Feldraum', () => {
+    const asteroids = bigField();
+    const origin = new Vector3(0, 0, 0);
+    const index = asteroids.findShadowFocus(origin, 1e9);
+    const center = new Vector3();
+    asteroids.getCenter(index, center);
+
+    // Floating Origin: das Feld wandert, die Weltkoordinaten wandern mit. Ein
+    // Beobachter, der beim Brocken bleibt, muss weiterhin denselben finden.
+    const shift = new Vector3(5000, -2000, 800);
+    asteroids.position.sub(shift);
+    const moved = center.clone().sub(shift);
+    expect(asteroids.findShadowFocus(moved, 1e9)).toBe(index);
+  });
+
+  it('uebergeht zerstoerte Brocken', () => {
+    const asteroids = bigField();
+    const origin = new Vector3(0, 0, 0);
+    const first = asteroids.findShadowFocus(origin, 1e9);
+    // So lange draufhalten, bis er zerbricht.
+    while (asteroids.isAlive(first)) asteroids.damage(first, 1000);
+    expect(asteroids.findShadowFocus(origin, 1e9)).not.toBe(first);
   });
 });

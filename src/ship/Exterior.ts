@@ -22,6 +22,7 @@ import type { Material, Texture, WebGLRenderer } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { createSurfaceMaps, TILE_METERS, type SurfaceKind, type SurfaceMaps } from './InteriorSurfaces';
 import type { FlightModel } from './FlightModel';
+import { WORLD_LAYER } from '../render/Postprocessing';
 
 /**
  * Laedt `public/models/ship-exterior.glb` — den Rumpf, wie ihn der Spieler in
@@ -39,12 +40,21 @@ import type { FlightModel } from './FlightModel';
  * eingeschaltet (siehe {@link Exterior.setVisible}).
  *
  * **Warum Layer 0 und nicht WORLD_LAYER:** Der Renderpfad zeichnet die Welt vor
- * dem Innenraum und loescht dazwischen die Tiefe. Laege der Rumpf in der Welt,
- * wuerde der Innenraum ueber ihn hinweggezeichnet — man saehe das Cockpit durch
- * die Aussenhaut. Auf Layer 0 sortieren Rumpf und Innenraum korrekt
+ * dem Innenraum und loescht dazwischen die Tiefe. Laege der Rumpf *nur* in der
+ * Welt, wuerde der Innenraum ueber ihn hinweggezeichnet — man saehe das Cockpit
+ * durch die Aussenhaut. Auf Layer 0 sortieren Rumpf und Innenraum korrekt
  * gegeneinander; der Preis ist, dass ein Asteroid zwischen Kamera und Schiff
  * den Rumpf nicht verdeckt. In der Aussenansicht ist das der deutlich
  * kleinere Fehler.
+ *
+ * Die Weltschicht ist trotzdem *zusaetzlich* eingeschaltet, und zwar allein
+ * wegen der Schattenkarte: Three nimmt dort nur mit, was die Layer der gerade
+ * gezeichneten Kamera teilt, und beim Schattendurchgang ist das die
+ * Weltkamera. Der Weltdurchgang zeichnet den Rumpf dadurch ein zweites Mal —
+ * die Nahkamera loescht die Tiefe und legt ihn danach ohnehin neu an, das
+ * Bild aendert sich also nicht. Der Aufwand faellt nur in der Aussenansicht
+ * an, denn im Cockpit ist der Rumpf unsichtbar und wird nirgends gezeichnet
+ * (dann wirft er auch keinen Schatten).
  */
 
 const EXTERIOR_ROOT = 'ShipExterior';
@@ -534,11 +544,17 @@ function fixMaterials(root: Object3D, environment: Texture | null): void {
   root.traverse((object) => {
     if (!(object instanceof Mesh)) return;
     object.layers.set(0);
-    // Der Rumpf steht im Schattenwurf der Innenraumlampen; Schatten sind hier
-    // weder noetig noch bezahlbar (die Schattenkarte wird genau einmal
-    // gezeichnet, lange bevor der Rumpf geladen ist).
-    object.castShadow = false;
-    object.receiveShadow = false;
+    // Zusaetzlich in der Weltschicht — nicht, damit die Weltkamera den Rumpf
+    // zeichnet (das tut gleich danach die Nahkamera noch einmal), sondern
+    // damit er ueberhaupt in der Schattenkarte des Sonnenlichts auftaucht:
+    // Three nimmt dort nur mit, was die Layer der gerade gezeichneten Kamera
+    // teilt, und das ist beim Schattendurchgang die Weltkamera. Ohne diese
+    // Zeile wirft ein auf einem Planetoiden gelandetes Schiff keinen Schatten.
+    object.layers.enable(WORLD_LAYER);
+    object.castShadow = true;
+    // Draussen erreicht den Rumpf nur die Sonne; die Innenraumlampen haben
+    // eine Reichweite von wenigen Metern und tragen hier nichts bei.
+    object.receiveShadow = true;
     boxProjectUv(object);
 
     const materials: Material[] = Array.isArray(object.material)

@@ -1,8 +1,9 @@
 import {
   ACESFilmicToneMapping,
-  PCFSoftShadowMap,
+  PCFShadowMap,
   PerspectiveCamera,
   PMREMGenerator,
+  Quaternion,
   Scene,
   Vector3,
   WebGLRenderer,
@@ -10,12 +11,14 @@ import {
 import { Input } from './core/Input';
 import { Time } from './core/Time';
 import { Asteroids } from './world/Asteroids';
+import { AsteroidDust } from './world/AsteroidDust';
+import { createSpaceEnvironment } from './world/SpaceEnvironment';
 import { Planet } from './world/Planet';
 import { Starfield } from './world/Starfield';
 import { Sun } from './world/Sun';
 import { Ship } from './ship/Ship';
 import { FlightModel } from './ship/FlightModel';
-import { loadShipInterior, setInteriorEnvironment } from './ship/InteriorLoader';
+import { loadShipInterior, refreshInteriorShadows, setInteriorEnvironment } from './ship/InteriorLoader';
 import { captureInteriorEnvironment, createInteriorEnvironment } from './ship/InteriorEnvironment';
 import { SeatedController } from './player/SeatedController';
 import { WalkController } from './player/WalkController';
@@ -58,10 +61,17 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
-// Schatten im Innenraum: Lampen und Einrichtung stehen fest zueinander, also
-// wird die Schattenkarte genau einmal gezeichnet statt in jedem Frame.
+// Schatten: die Lampen des Innenraums stehen fest zueinander und zeichnen ihre
+// Karte genau einmal; das Sonnenlicht draussen zeichnet seine mehrmals je
+// Sekunde neu, weil sich der Brocken darunter dreht (siehe
+// `updateRockLighting`). Deshalb bleibt `autoUpdate` aus und die Freigabe
+// laeuft ueber den Renderpfad.
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = PCFSoftShadowMap;
+// Nicht `PCFSoftShadowMap`: das ist in three seit r185 abgekuendigt und wird
+// ohnehin still auf PCF zurueckgestuft. Fuer die Sonne ist das auch das
+// richtige Filter — im Vakuum gibt es keine Streuung, ein Kraterschatten hat
+// nur den schmalen Halbschatten, den die Sonnenscheibe selbst erzeugt.
+renderer.shadowMap.type = PCFShadowMap;
 renderer.shadowMap.autoUpdate = false;
 container.appendChild(renderer.domElement);
 
@@ -109,6 +119,23 @@ const asteroids = new Asteroids();
 // Grossbrocken haengen als eigene Kinder darin, und das traverse() weiter
 // unten laeuft nur einmal beim Start.
 asteroids.setLayer(WORLD_LAYER);
+
+// Reflexionsumgebung fuer das Gestein: Sonne und beleuchteter Planet. Ohne sie
+// hat ein metallisches Fragment nichts zu spiegeln — die Erzadern wurden von
+// ihrer eigenen Metalness dunkel statt glaenzend —, und die Schattenseiten
+// haetten nur einen richtungslosen Zuschlag statt Erdschein.
+const spaceEnvironment = createSpaceEnvironment(renderer, {
+  sunDirection: sun.direction,
+  planetDirection: planet.position.clone().normalize(),
+  // 220 km Radius auf 850 km Entfernung.
+  planetAngularRadius: (Math.asin(220 / 850) * 180) / Math.PI,
+});
+asteroids.setEnvironment(spaceEnvironment);
+
+// Staub zwischen den Brocken: die Parallaxe, an der man im Vakuum ueberhaupt
+// erst Eigenbewegung ablesen kann.
+const dust = new AsteroidDust();
+dust.setViewportHeight(window.innerHeight, worldCamera.fov);
 // --- Asteroidenfeld Ende ---
 
 
@@ -129,12 +156,12 @@ const glass = new GlassHud();
 ship.add(glass.group);
 // --- Cockpitanzeigen Ende ---
 
-scene.add(starfield, sun, planet, asteroids, ship, weapons.mesh, effects);
+scene.add(starfield, sun, planet, asteroids, dust, ship, weapons.mesh, effects);
 
 // Jedes Objekt in seinen Entfernungsbereich legen. Geschosse und Effekte
 // gehoeren zur Welt: sie fliegen zwischen den Brocken, und im Nah-Durchgang
 // (Tiefe geloescht) laegen sie faelschlich immer davor.
-for (const object of [asteroids, weapons.mesh, effects]) {
+for (const object of [asteroids, dust, weapons.mesh, effects]) {
   object.traverse((child) => child.layers.set(WORLD_LAYER));
 }
 for (const object of [starfield, sun, planet]) {
@@ -329,9 +356,12 @@ const captureOrigin = new Vector3();
 
 function captureReflections(): void {
   pendingCapture = false;
-  // Einmalige Schattenkarte, sobald der Innenraum steht.
-  renderer.shadowMap.needsUpdate = true;
+  // Einmalige Schattenkarte, sobald der Innenraum steht. Die Lampen sind
+  // eingefroren (`shadow.autoUpdate = false`) und muessen einzeln freigegeben
+  // werden — sonst zeichnet der Durchgang nur noch das Sonnenlicht draussen.
   const interior = ship.getInterior();
+  refreshInteriorShadows(interior);
+  renderer.shadowMap.needsUpdate = true;
   // Mitte des Gangs: von dort sieht die Cubemap in alle drei Sektionen.
   captureOrigin.set(0, 1.5, 0).applyMatrix4(ship.matrixWorld);
   setInteriorEnvironment(interior, captureInteriorEnvironment(renderer, scene, captureOrigin));
@@ -356,6 +386,55 @@ function applyFloatingOrigin(): void {
   docking.shift(originOffset); // --- Raumstation ---
   landing.shift(originOffset); // --- Landung ---
   // Starfield und Sonne folgen der Kamera und brauchen keine Verschiebung.
+}
+
+// -------------------------------------------- Licht und Schatten der Brocken
+/**
+ * Bis zu welcher Entfernung (Oberflaeche) ein Grossbrocken eine Schattenkarte
+ * bekommt. Weiter draussen ist ein Kraterschatten ohnehin kleiner als ein
+ * Bildpunkt.
+ */
+const SHADOW_RANGE = 2500;
+
+/**
+ * Sekunden zwischen zwei Schattenkarten.
+ *
+ * **Warum nicht je Bild:** der Durchgang zeichnet das Feld ein zweites Mal.
+ * Er muss es aber gar nicht so oft: ein Planetoid dreht sich mit gut einem
+ * Grad je Sekunde, die Sonne steht fest, und die Karte haengt an der Lage des
+ * Brockens — nicht an der der Kamera.
+ */
+const SHADOW_INTERVAL = 0.2;
+
+let shadowTimer = 0;
+const sunViewDirection = new Vector3();
+const cameraInverse = new Quaternion();
+const shadowCenter = new Vector3();
+
+function updateRockLighting(dt: number): void {
+  // Sonnenrichtung im Sichtraum. Gegenlichtsaum und Reif auf Eisbrocken
+  // haengen daran, und ein per `onBeforeCompile` geflicktes Standardmaterial
+  // kommt an die Lichter der Szene nicht heran. Sichtraum heisst Kameraraum:
+  // die Umrechnung ist die inverse Kameradrehung, mehr nicht.
+  cameraInverse.copy(worldCamera.quaternion).invert();
+  sunViewDirection.copy(sun.direction).applyQuaternion(cameraInverse);
+  asteroids.setSunViewDirection(sunViewDirection);
+
+  const index = asteroids.findShadowFocus(ship.position, SHADOW_RANGE);
+  if (index < 0) {
+    sun.clearShadow();
+    return;
+  }
+  asteroids.getCenter(index, shadowCenter);
+  sun.focusShadow(shadowCenter, asteroids.getRadius(index));
+
+  shadowTimer -= dt;
+  if (shadowTimer > 0) return;
+  shadowTimer = SHADOW_INTERVAL;
+  // Ueber den Renderpfad, nicht direkt: die Karte muss im Weltdurchgang
+  // entstehen, sonst sind die Asteroiden nicht dabei. Die Lampen des
+  // Innenraums stehen auf `shadow.autoUpdate = false` und bleiben stehen.
+  post.requestShadowUpdate();
 }
 
 // ---------------------------------------------------------------- Game-Loop
@@ -429,6 +508,10 @@ function render(dt: number): void {
   camera.getWorldPosition(cameraWorldPos);
   starfield.update(cameraWorldPos);
   sun.update(cameraWorldPos);
+  // Nach `sun.update`: die Schattenkamera rechnet im lokalen Raum der Gruppe,
+  // und die steht erst jetzt an der richtigen Stelle.
+  updateRockLighting(dt);
+  dust.update(cameraWorldPos);
 
   // --- Cockpitanzeigen ---
   // Ein Zustand je Frame fuer alle drei Anzeigen: Schirme, Scheibe, DOM.
@@ -506,6 +589,7 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
   post.setSize(window.innerWidth, window.innerHeight);
   starfield.setPixelRatio(renderer.getPixelRatio());
+  dust.setViewportHeight(window.innerHeight, worldCamera.fov);
 });
 
 // Debug-Zugriff fuer Tests und die folgenden Arbeitspakete.
@@ -515,6 +599,6 @@ Object.assign(window as unknown as Record<string, unknown>, {
     weapons, effects, asteroids, targeting, hull, shake, radar,
     post, renderer, displays, glass, cargo,
     station, docking, trade, damage, interactables,
-    mining, miningBeam, landing,
+    mining, miningBeam, landing, dust, sun, spaceEnvironment,
   },
 });

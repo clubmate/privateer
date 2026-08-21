@@ -1,8 +1,8 @@
-import { Euler, Group, LOD, MeshStandardMaterial, Object3D, Quaternion, Vector3 } from 'three';
-import type { Camera } from 'three';
+import { Euler, Group, LOD, Object3D, Quaternion, Vector3 } from 'three';
+import type { Camera, Texture } from 'three';
 import { makeRng } from './noise';
 import { buildRockGeometry, RockShape, type ArchetypeId } from './AsteroidShapes';
-import { createRockMaterial, RockBatch } from './AsteroidBatch';
+import { createRockMaterial, RockBatch, setRockEnvironment, type RockMaterial } from './AsteroidBatch';
 import {
   MINERALS,
   MINERAL_IDS,
@@ -88,14 +88,16 @@ function hitpointsFor(radius: number): number {
  * Die drei Instanzklassen: je Formvariante ein Stapel und ein Zeichenaufruf.
  *
  * `detail` sind Unterteilungen der Icosphere (1 = 80 Dreiecke, 2 = 320,
- * 3 = 1280, 4 = 5120). Die Aufloesung folgt dem, wie nah man einer Klasse
+ * 3 = 1280, 4 = 5120). Auch das Geroell bekommt 320: bei 80 Dreiecken ist die
+ * Silhouette eines Sechs-Meter-Brockens aus fuenfzehn Metern ein sichtbares
+ * Vieleck, und gegen einen Umriss hilft kein Shader. Die Aufloesung folgt dem, wie nah man einer Klasse
  * ueblicherweise kommt: an einem Felsen von 50 m schwebt man beim Foerdern,
  * ein Geroellbrocken von drei Metern huscht vorbei. `variants` steuert die
  * Wiederholung — mehr Formen heissen mehr Zeichenaufrufe, weniger heisst
  * sichtbares Muster; Lage, Groesse und Inhalt streuen zusaetzlich.
  */
 const TIERS: readonly { size: AsteroidSize; variants: number; detail: number }[] = [
-  { size: 'pebble', variants: 5, detail: 1 },
+  { size: 'pebble', variants: 5, detail: 2 },
   { size: 'small', variants: 8, detail: 3 },
   { size: 'medium', variants: 6, detail: 4 },
 ];
@@ -106,6 +108,15 @@ const DETAIL_HUGE = [5, 3];
 
 /** Ab dem Wievielfachen des Radius die grobe Detailstufe genuegt. */
 const LOD_SWITCH = 8;
+
+/**
+ * Hysterese der Detailstufen, als Anteil der Umschaltweite. Ohne sie
+ * flackert ein Brocken, der genau auf der Grenze steht, mit jedem Bild
+ * zwischen zwei Stufen — und beim Vorbeifliegen springt die Oberflaeche
+ * sichtbar um. Mit ihr schaltet er beim Naeherkommen frueher hoch, als er
+ * beim Wegfliegen zurueckfaellt.
+ */
+const LOD_HYSTERESIS = 0.12;
 
 /**
  * Nahstufe der Planetoiden: 81.920 Dreiecke, gut drei Meter je Kante bei
@@ -218,7 +229,7 @@ export class Asteroids extends Group implements AsteroidField {
 
   private readonly options: AsteroidOptions;
   private readonly rng: () => number;
-  private readonly material: MeshStandardMaterial;
+  private readonly material: RockMaterial;
 
   // ------------------------------------------------------- Daten je Platz
   private readonly positions: Vector3[] = [];
@@ -245,6 +256,8 @@ export class Asteroids extends Group implements AsteroidField {
   private readonly nodes: (SoloNode | null)[] = [];
   /** Streuung der Grundhelligkeit je Platz. */
   private readonly shades: number[] = [];
+  /** Streuung von Farbton und Saettigung je Platz, -1..1. */
+  private readonly tints: number[] = [];
   /** Renderschicht, damit nachgebaute Stufen sie erben. */
   private layer = 0;
 
@@ -494,7 +507,7 @@ export class Asteroids extends Group implements AsteroidField {
       batch.setTransform(0, _point.set(0, 0, 0), _quat.identity(), 1);
       batch.flush();
       parts.push(batch);
-      node.addLevel(batch.mesh, l === 0 ? 0 : this.radii[index]! * LOD_SWITCH);
+      node.addLevel(batch.mesh, l === 0 ? 0 : this.radii[index]! * LOD_SWITCH, LOD_HYSTERESIS);
     }
     this.parts[index] = parts;
     this.slots[index] = 0;
@@ -524,7 +537,7 @@ export class Asteroids extends Group implements AsteroidField {
     );
     batch.setTransform(0, _point.set(0, 0, 0), _quat.identity(), 1);
     batch.flush();
-    batch.setMineral(0, this.minerals[index]!, this.shades[index]!);
+    batch.setMineral(0, this.minerals[index]!, this.shades[index]!, this.tints[index]!);
     // Nachtraeglich erzeugte Kinder stehen nicht mehr im einmaligen traverse
     // von main.ts — die Schicht muss das Feld selbst setzen, sonst zeichnet
     // die Stufe in der falschen Tiefenschicht oder gar nicht.
@@ -534,7 +547,7 @@ export class Asteroids extends Group implements AsteroidField {
     // Die bisher feinste Stufe rueckt nach hinten, die neue kommt davor.
     const first = node.levels[0];
     if (first) first.distance = this.radii[index]! * FINE_SWITCH;
-    node.addLevel(batch.mesh, 0);
+    node.addLevel(batch.mesh, 0, LOD_HYSTERESIS);
   }
 
   /** Alle Plaetze in ihre Stapel schreiben (Lage und Aussehen). */
@@ -549,9 +562,14 @@ export class Asteroids extends Group implements AsteroidField {
   private writeAppearance(index: number): void {
     // Etwas Streuung in der Grundhelligkeit, sonst wirkt das Feld gegossen.
     const shade = 0.55 + this.rng() * 0.45;
+    // Und etwas in Farbton und Saettigung: zwei gleich helle Eisenbrocken
+    // nebeneinander sehen sonst nach derselben Form aus, zwei unterschiedlich
+    // helle nach demselben Brocken in anderem Licht.
+    const tint = this.rng() * 2 - 1;
     this.shades[index] = shade;
+    this.tints[index] = tint;
     for (const batch of this.parts[index]!) {
-      batch.setMineral(this.slots[index]!, this.minerals[index]!, shade);
+      batch.setMineral(this.slots[index]!, this.minerals[index]!, shade, tint);
     }
   }
 
@@ -587,6 +605,49 @@ export class Asteroids extends Group implements AsteroidField {
   setLayer(layer: number): void {
     this.layer = layer;
     this.traverse((child: Object3D) => child.layers.set(layer));
+  }
+
+  /**
+   * Reflexionsumgebung fuer das Gestein setzen. Muss das Feld anbieten: das
+   * Material gehoert ihm, und es ist genau eines fuer alle Brocken.
+   */
+  setEnvironment(texture: Texture | null): void {
+    setRockEnvironment(this.material, texture);
+  }
+
+  /**
+   * Sonnenrichtung im Sichtraum (zur Sonne zeigend). Der Gegenlichtsaum und
+   * der Reif auf Eisbrocken haengen daran; beide muessen je Bild nachgefuehrt
+   * werden, weil sich die Kamera dreht.
+   */
+  setSunViewDirection(direction: Vector3): void {
+    this.material.rockSun.value.copy(direction);
+  }
+
+  /**
+   * Den Grossbrocken suchen, fuer den sich eine Schattenkarte lohnt: den
+   * naechsten mit eigener Geometrie innerhalb von `maxDistance`. `-1`, wenn
+   * keiner nah genug ist.
+   *
+   * **Warum nur einer:** eine gerichtete Schattenkarte deckt einen Ausschnitt
+   * ab. Streckte man sie ueber das halbe Feld, laege ein Texel bei zehn
+   * Metern und von einem Kraterschatten bliebe eine Treppe. Ein Brocken,
+   * scharf — das ist der, vor dem man gerade steht.
+   */
+  findShadowFocus(origin: Vector3, maxDistance: number): number {
+    let best = -1;
+    let bestDistance = maxDistance;
+    for (let i = 0; i < this.count; i++) {
+      if (!this.nodes[i] || this.hitpoints[i]! <= 0) continue;
+      // `positions` ist feldlokal, `origin` eine Weltkoordinate — der Versatz
+      // des Feldes gehoert also dazu (Floating Origin).
+      _probe.copy(this.positions[i]!).add(this.position);
+      const distance = Math.max(_probe.distanceTo(origin) - this.radii[i]!, 0);
+      if (distance >= bestDistance) continue;
+      bestDistance = distance;
+      best = i;
+    }
+    return best;
   }
 
   // -------------------------------------------------------------- Ablauf

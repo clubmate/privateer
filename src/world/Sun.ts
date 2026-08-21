@@ -14,6 +14,19 @@ import {
 
 const DISTANCE = 1_500_000;
 
+/**
+ * Aufloesung der Schattenkarte des Sonnenlichts. Sie deckt immer nur *einen*
+ * Grossbrocken ab (siehe {@link Sun.focusShadow}); bei einem 400-m-Planetoiden
+ * liegt ein Texel damit bei gut einem halben Meter.
+ */
+const SHADOW_MAP_SIZE = 2048;
+
+/** Abstand der Schattenkamera vom Brocken, als Vielfaches seines Radius. */
+const SHADOW_STANDOFF = 4;
+
+/** Ueberstand der Schattenkamera ueber den Umriss hinaus. */
+const SHADOW_MARGIN = 1.35;
+
 function glowTexture(size: number, stops: Array<[number, string]>): CanvasTexture {
   const canvas = document.createElement('canvas');
   canvas.width = size;
@@ -28,6 +41,8 @@ function glowTexture(size: number, stops: Array<[number, string]>): CanvasTextur
   return tex;
 }
 
+const _focus = new Vector3();
+
 /**
  * Sonne als Billboard (Kern + weiter Halo) plus das Szenenlicht.
  * Die Gruppe folgt der Kamera in der Translation — die Sonne ist quasi
@@ -37,6 +52,14 @@ export class Sun extends Group {
   /** Normierte Richtung von der Szene zur Sonne. */
   readonly direction: Vector3;
   readonly light: DirectionalLight;
+
+  /**
+   * Zielpunkt des Sonnenlichts. Er liegt normalerweise im Gruppenursprung;
+   * fuer eine Schattenkarte wandern Licht *und* Ziel gemeinsam an den
+   * Brocken. Weil beide um denselben Betrag verschoben werden, bleibt die
+   * Lichtrichtung dabei unveraendert — nur die Schattenkamera zielt neu.
+   */
+  private readonly lightTarget: Object3D;
 
   constructor(direction = new Vector3(0.42, 0.24, -1).normalize(), color = new Color(0xfff3e0)) {
     super();
@@ -89,14 +112,22 @@ export class Sun extends Group {
     const target = new Object3D();
     target.name = 'SunLightTarget';
     this.add(target);
+    this.lightTarget = target;
 
     this.light = new DirectionalLight(color, 3.2);
     this.light.name = 'SunLight';
     this.light.position.copy(this.direction).multiplyScalar(1000);
     this.light.target = target;
+    // Ausgeschaltet, bis ein Brocken nah genug ist: eine Schattenkarte ohne
+    // Gegenstand kostet nur.
+    this.light.castShadow = false;
+    this.light.shadow.mapSize.set(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+    this.light.shadow.bias = -0.0006;
     this.add(this.light);
 
-    // Sehr schwaches Fuellicht, damit Schattenseiten nicht komplett schwarz sind.
+    // Sehr schwaches Fuellicht fuer den Planeten. Es bleibt in der
+    // Tiefenschicht und erreicht die Brocken nicht — deren Fuelllicht kommt
+    // seit dem Umbau aus der Reflexionsumgebung, siehe SpaceEnvironment.
     const fill = new HemisphereLight(0x18324f, 0x080604, 0.18);
     fill.name = 'SpaceFill';
     this.add(fill);
@@ -104,5 +135,41 @@ export class Sun extends Group {
 
   update(cameraWorldPosition: Vector3): void {
     this.position.copy(cameraWorldPosition);
+  }
+
+  /**
+   * Die Schattenkamera auf einen Brocken richten. `center` sind
+   * Weltkoordinaten, `radius` sein Umriss in Metern.
+   *
+   * Aufzurufen *nach* {@link update} — die Gruppe steht dann an der Kamera,
+   * und die Umrechnung in ihren lokalen Raum ist eine reine Verschiebung.
+   */
+  focusShadow(center: Vector3, radius: number): void {
+    _focus.copy(center).sub(this.position);
+    this.lightTarget.position.copy(_focus);
+    this.light.position.copy(_focus).addScaledVector(this.direction, radius * SHADOW_STANDOFF);
+
+    const span = radius * SHADOW_MARGIN;
+    const camera = this.light.shadow.camera;
+    camera.left = -span;
+    camera.right = span;
+    camera.top = span;
+    camera.bottom = -span;
+    camera.near = radius * 0.5;
+    camera.far = radius * (SHADOW_STANDOFF + SHADOW_MARGIN + 1);
+    camera.updateProjectionMatrix();
+    // Der Normal-Bias haengt an der Texelgroesse, und die haengt am Brocken:
+    // ein fester Wert wuerde auf dem Planetoiden Streifen ziehen und am
+    // Grossfelsen den Schatten von der Kante loesen.
+    this.light.shadow.normalBias = Math.max(0.05, (span * 2) / SHADOW_MAP_SIZE * 2.5);
+    this.light.castShadow = true;
+  }
+
+  /** Schattenwurf abschalten, wenn kein Brocken in Reichweite ist. */
+  clearShadow(): void {
+    if (!this.light.castShadow) return;
+    this.light.castShadow = false;
+    this.lightTarget.position.set(0, 0, 0);
+    this.light.position.copy(this.direction).multiplyScalar(1000);
   }
 }

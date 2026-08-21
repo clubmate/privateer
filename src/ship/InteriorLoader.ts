@@ -196,6 +196,13 @@ function addInteriorLights(root: Object3D): void {
       // Selbstschatten als Streifenmuster ueber Waende und Decke.
       light.shadow.bias = -0.002;
       light.shadow.normalBias = 0.035;
+      // Eingefroren. Lampen und Einrichtung stehen fest zueinander, die Karte
+      // aendert sich also nie — und seit die Sonne draussen ihre eigene Karte
+      // mehrmals je Sekunde neu zeichnet, wuerde jede dieser Punktlampen sonst
+      // im selben Takt sechs Wuerfelseiten mitzeichnen. Freigegeben wird sie
+      // genau einmal, siehe {@link refreshInteriorShadows}.
+      light.shadow.autoUpdate = false;
+      light.shadow.needsUpdate = true;
     }
 
     root.add(light);
@@ -547,6 +554,18 @@ function applyScreens(root: Object3D): void {
  * nachgebaute Kammer durch eine Aufnahme des echten Innenraums zu ersetzen
  * (siehe `captureInteriorEnvironment`).
  */
+/**
+ * Die Schattenkarten des Innenraums einmal neu zeichnen lassen. Noetig, wenn
+ * sich am Aufbau etwas geaendert hat — sie stehen sonst auf Dauer still
+ * (siehe `light.shadow.autoUpdate` in {@link addInteriorLights}).
+ */
+export function refreshInteriorShadows(root: Object3D): void {
+  root.traverse((child: Object3D) => {
+    const light = child as Object3D & { shadow?: { needsUpdate: boolean } };
+    if (light.shadow) light.shadow.needsUpdate = true;
+  });
+}
+
 export function setInteriorEnvironment(root: Object3D, environment: Texture): void {
   const done = new Set<Material>();
   root.traverse((obj) => {
