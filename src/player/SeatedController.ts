@@ -2,14 +2,19 @@ import { MathUtils, Vector2 } from 'three';
 import type { Input } from '../core/Input';
 import type { FlightModel } from '../ship/FlightModel';
 
-/** Tastenbelegung sitzend (physische Codes, siehe PLAN.md). */
+/**
+ * Tastenbelegung sitzend (physische Codes, siehe PLAN.md).
+ *
+ * A/D rollen, Q/E schieben quer. Die beiden Paare lagen frueher andersherum;
+ * getauscht statt umbelegt, damit keine Funktion verlorengeht.
+ */
 const KEYS = {
   speedUp: 'KeyW',
   speedDown: 'KeyS',
-  rollLeft: 'KeyQ',
-  rollRight: 'KeyE',
-  strafeLeft: 'KeyA',
-  strafeRight: 'KeyD',
+  rollLeft: 'KeyA',
+  rollRight: 'KeyD',
+  strafeLeft: 'KeyQ',
+  strafeRight: 'KeyE',
   up: 'ShiftLeft',
   down: 'ControlLeft',
   fullStop: 'KeyX',
@@ -34,6 +39,15 @@ export interface SeatedControllerOptions {
   degreesPerPixel: number;
   /** Glaettung der gemessenen Mausgeschwindigkeit im Arcade-Modus, in Sekunden. */
   aimSmoothing: number;
+  /**
+   * Maus hoch = Nase runter, wie am Steuerhorn.
+   *
+   * Betrifft nur die Nickachse und nur den Flug — das Umsehen zu Fuss bleibt
+   * unveraendert, dort erwartet man Blickrichtung, keine Steuerflaeche. Der
+   * Zeiger im HUD folgt weiterhin der *Maus*, nicht der Nase: er zeigt, was
+   * der Pilot befiehlt, und nicht, wohin das Schiff daraufhin kippt.
+   */
+  invertPitch: boolean;
 }
 
 const DEFAULT_OPTIONS: SeatedControllerOptions = {
@@ -43,6 +57,7 @@ const DEFAULT_OPTIONS: SeatedControllerOptions = {
   repeatDelay: 0.3,
   degreesPerPixel: 0.08,
   aimSmoothing: 0.035,
+  invertPitch: true,
 };
 
 /**
@@ -52,10 +67,13 @@ const DEFAULT_OPTIONS: SeatedControllerOptions = {
  * {@link SeatedControllerOptions.degreesPerPixel}; steht die Maus still, steht
  * auch die Drehung. Das HUD zeigt den aktuellen Steuerbefehl als Cursor.
  *
- * **Newton**: Maus wie in Privateer — die Mausdeltas summieren sich zu einem
- * virtuellen Offset vom Bildschirmzentrum (geclampt auf den Einheitskreis).
- * Der Offset bleibt stehen, wo der Pilot ihn hinschiebt, und erzeugt
- * proportionalen Pitch-/Yaw-Torque.
+ * **Newton und Assist**: Maus wie in Privateer — die Mausdeltas summieren
+ * sich zu einem virtuellen Offset vom Bildschirmzentrum (geclampt auf den
+ * Einheitskreis). Der Offset bleibt stehen, wo der Pilot ihn hinschiebt, und
+ * erzeugt proportionalen Pitch-/Yaw-Torque.
+ *
+ * Die Nickachse ist in beiden Faellen umgekehrt (siehe
+ * {@link SeatedControllerOptions.invertPitch}).
  *
  * `update()` laeuft einmal pro Frame (siehe dort). Ueber `enable()`/`disable()`
  * abschaltbar — AP4 (Walk-Mode) schaltet ihn beim Aufstehen ab und beim
@@ -175,13 +193,15 @@ export class SeatedController {
     const gain = MathUtils.degToRad(this.options.degreesPerPixel) / rate;
 
     const yaw = clamp(this.aimRate.x * gain, -1, 1);
-    const pitch = clamp(-this.aimRate.y * gain, -1, 1); // Maus hoch (dy<0) = Nase hoch
+    // Mausweg nach unten ist positiv (dy>0). `down` ist damit direkt der
+    // Ausschlag, den der Zeiger anzeigen soll.
+    const down = clamp(this.aimRate.y * gain, -1, 1);
 
     const i = this.flight.inputs;
     i.yaw = yaw;
-    i.pitch = pitch;
-    // Fuer das HUD: der Cursor zeigt den aktuellen Steuerbefehl.
-    this.offset.set(yaw, -pitch);
+    i.pitch = this.options.invertPitch ? down : -down;
+    // Fuer das HUD: der Zeiger folgt der Maus (y positiv = unten).
+    this.offset.set(yaw, down);
   }
 
   /** Newton: aufsummierter Ausschlag, der stehen bleibt (Privateer-Trimmung). */
@@ -202,7 +222,9 @@ export class SeatedController {
 
     const i = this.flight.inputs;
     i.yaw = this.offset.x * response;
-    i.pitch = -this.offset.y * response; // Maus nach oben (dy<0) = Nase hoch
+    // `offset.y` ist positiv nach unten. Ohne Umkehr hiesse Maus hoch also
+    // Nase hoch; mit Umkehr Nase runter, wie am Steuerhorn.
+    i.pitch = (this.options.invertPitch ? this.offset.y : -this.offset.y) * response;
   }
 
   // ------------------------------------------------------- Sollgeschwindigkeit

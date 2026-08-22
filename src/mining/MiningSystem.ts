@@ -248,6 +248,21 @@ export class MiningSystem {
     this.scanIndex = -1;
   }
 
+  /**
+   * Scan anwerfen, ohne umzuschalten.
+   *
+   * Fuer das Erfassen per Maus: dort ist "scannen" die Folge einer anderen
+   * Handlung, kein Schalter. Ein laufender Scan wird neu angesetzt (das Ziel
+   * hat ja gerade gewechselt), ein bereits bekannter Brocken loest keinen
+   * neuen aus — die Antwort steht schon fest.
+   */
+  beginScan(index: number): void {
+    if (this.isScanned(index)) return;
+    this.scanning = true;
+    this.scanTimer = 0;
+    this.scanIndex = -1;
+  }
+
   /** Foerdertaste (gehalten), einmal je Frame gesetzt. */
   setBeam(held: boolean): void {
     this.beamHeld = held;

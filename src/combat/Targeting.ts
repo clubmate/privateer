@@ -11,6 +11,15 @@ import type { Asteroids } from '../world/Asteroids';
  */
 
 export interface TargetingParams {
+  /**
+   * Halber Oeffnungswinkel beim Erfassen ueber die Ziellinie, in Radiant.
+   *
+   * Deutlich enger als {@link TargetingParams.cone}: das Weiterschalten mit T
+   * sucht *irgendein* Ziel voraus, das Erfassen mit der rechten Maustaste
+   * meint genau den Brocken unter dem Fadenkreuz. Der Kegel faengt nur ab,
+   * dass man den Rand knapp verfehlt.
+   */
+  aimCone: number;
   /** Groesste Erfassungsentfernung in Metern. */
   range: number;
   /** Halber Oeffnungswinkel des Erfassungskegels um die Nase, in Radiant. */
@@ -22,6 +31,7 @@ export interface TargetingParams {
 export const DEFAULT_TARGETING_PARAMS: TargetingParams = {
   range: 3000,
   cone: Math.PI / 5, // 36 Grad
+  aimCone: Math.PI / 36, // 5 Grad
   dropRange: 4000,
 };
 
@@ -126,6 +136,48 @@ export class Targeting {
 
   clear(): void {
     this.index = -1;
+  }
+
+  /**
+   * Den Brocken erfassen, auf den das Fadenkreuz zeigt.
+   *
+   * Zwei Stufen, und die Reihenfolge ist der Punkt: erst ein Strahltest gegen
+   * die *echte* Geometrie — was man sieht, erfasst man auch, und bei einem
+   * unfoermigen Splitter ist das etwas anderes als seine Umrisskugel. Nur
+   * wenn der Strahl nichts trifft, faengt ein enger Kegel den knapp
+   * verfehlten Rand ab; sonst muesste man pixelgenau zielen.
+   *
+   * Liefert den erfassten Index oder -1, wenn dort nichts ist. Anders als
+   * {@link cycle} wird eine bestehende Erfassung dabei **nicht** aufgehoben:
+   * wer ins Leere klickt, verliert sein Ziel nicht.
+   */
+  acquire(asteroids: Asteroids, origin: Vector3, forward: Vector3): number {
+    const hit = asteroids.hitSegment(origin, forward, this.params.range);
+    if (hit) {
+      this.index = hit.index;
+      return this.index;
+    }
+
+    const minCos = Math.cos(this.params.aimCone);
+    const range = this.params.range;
+    let best = -1;
+    let bestCos = minCos;
+
+    for (let i = 0; i < asteroids.count; i++) {
+      if (!asteroids.isAlive(i)) continue;
+      asteroids.getCenter(i, _center);
+      _toTarget.subVectors(_center, origin);
+      const distanceSq = _toTarget.lengthSq();
+      if (distanceSq > range * range || distanceSq < 1e-6) continue;
+
+      const cos = _toTarget.dot(forward) / Math.sqrt(distanceSq);
+      if (cos <= bestCos) continue;
+      bestCos = cos;
+      best = i;
+    }
+
+    if (best >= 0) this.index = best;
+    return best;
   }
 
   /**

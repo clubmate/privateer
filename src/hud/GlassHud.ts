@@ -3,10 +3,12 @@ import {
   BufferGeometry,
   CanvasTexture,
   Color,
+  DynamicDrawUsage,
   Float32BufferAttribute,
   Group,
   Line,
   LineBasicMaterial,
+  LineSegments,
   Matrix4,
   Mesh,
   MeshBasicMaterial,
@@ -62,9 +64,28 @@ const MARKER_MIN_SPEED = 1;
 /** So lange blitzt das Fadenkreuz nach einem Treffer auf, in Sekunden. */
 const HIT_FLASH = 0.18;
 
+/**
+ * Ab welchem Ausschlag der Steuerzeiger einblendet und wann er voll da ist.
+ * Unterhalb der ersten Schwelle liegt er ohnehin im Fadenkreuz — zwei Ringe
+ * uebereinander lesen sich als Fehler, nicht als Anzeige.
+ */
+const CURSOR_FADE_IN = 0.03;
+const CURSOR_FADE_FULL = 0.14;
+
 /** Farben. Werte ueber 1 sind Absicht: der Bloom soll sie aufgreifen. */
 const FLIGHT_COLOR = new Color(0.55, 2.1, 1.35);
 const TARGET_COLOR = new Color(2.4, 1.35, 0.45);
+
+/**
+ * Farbe des Fadenkreuzes und des Steuerzeigers — bewusst *unterhalb* der
+ * Bloom-Schwelle (0,75 Helligkeit, siehe `Postprocessing.ts`).
+ *
+ * Der Rest des HUDs leuchtet absichtlich: eine Zielklammer soll ins Auge
+ * springen. Das Fadenkreuz nicht — es steht dauerhaft in der Bildmitte, genau
+ * dort, wo man hinsieht. Was dort leuchtet, blendet. Als saubere duenne Linie
+ * gelesen ist es praeziser und stoert nicht.
+ */
+const RETICLE_COLOR = new Color(0.32, 0.78, 0.62);
 
 // ------------------------------------------------------------------ Rechnen
 
@@ -103,10 +124,28 @@ export function markerOpacity(angleDeg: number, limitDeg = MARKER_LIMIT_DEG, fad
   return (limitDeg - angleDeg) / fadeDeg;
 }
 
+/** Weiche Stufe zwischen zwei Schwellen, 0..1. */
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
 // ------------------------------------------------------------ Zeichenvorrat
 
-/** Leinwand fuer ein Symbol; weiss auf durchsichtig, die Farbe kommt vom Material. */
-function symbolCanvas(size: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
+/**
+ * Leinwand fuer ein Symbol; weiss auf durchsichtig, die Farbe kommt vom
+ * Material.
+ *
+ * `glow` legt einen weichen Hof um jede Linie. Fuer Bahnmarken und Zielklammer
+ * ist er richtig — sie sollen als Leuchtspur lesbar sein, auch vor hellem
+ * Gestein. Fuer Fadenkreuz und Steuerzeiger nicht: die stehen dauerhaft in
+ * der Bildmitte, und ein Hof macht aus der duennen Linie dort einen
+ * Leuchtfleck. Ohne ihn bleibt eine scharfe Kante.
+ */
+function symbolCanvas(
+  size: number,
+  glow = true,
+): [HTMLCanvasElement, CanvasRenderingContext2D] {
   const canvas = document.createElement('canvas');
   canvas.width = size;
   canvas.height = size;
@@ -115,10 +154,10 @@ function symbolCanvas(size: number): [HTMLCanvasElement, CanvasRenderingContext2
   ctx.strokeStyle = '#ffffff';
   ctx.fillStyle = '#ffffff';
   ctx.lineCap = 'round';
-  // Der Halo macht aus einer harten Linie eine Leuchtspur — ohne ihn sehen
-  // die Zeichen wie aufgeklebte Vektoren aus.
-  ctx.shadowColor = 'rgba(255,255,255,0.9)';
-  ctx.shadowBlur = size * 0.05;
+  if (glow) {
+    ctx.shadowColor = 'rgba(255,255,255,0.9)';
+    ctx.shadowBlur = size * 0.05;
+  }
   return [canvas, ctx];
 }
 
@@ -128,30 +167,33 @@ function texture(canvas: HTMLCanvasElement): CanvasTexture {
   return t;
 }
 
+/**
+ * Fadenkreuz: ein duenner Ring, vier abgesetzte Striche, ein Punkt auf der
+ * Kanonenlinie. Mehr nicht.
+ *
+ * Der Vorgaenger hatte zusaetzlich einen zweiten, halbtransparenten Ring —
+ * zusammen mit der ueberhellen Farbe ergab das einen Leuchtfleck mitten im
+ * Blickfeld. Die Luecke zwischen Ring und Strichen ersetzt ihn: sie gibt dem
+ * Zeichen Form, ohne Flaeche zu fuellen.
+ */
 function crosshairTexture(): Texture {
-  const [canvas, ctx] = symbolCanvas(256);
+  const [canvas, ctx] = symbolCanvas(256, false);
   const c = 128;
+  // Fuenf Leinwandpixel sind auf dem Schirm knapp anderthalb — duenn genug,
+  // dass es eine Linie bleibt, dick genug, dass sie nicht ausfranst.
   ctx.lineWidth = 5;
   ctx.beginPath();
-  ctx.arc(c, c, 30, 0, Math.PI * 2);
+  ctx.arc(c, c, 34, 0, Math.PI * 2);
   ctx.stroke();
 
-  ctx.globalAlpha = 0.55;
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.arc(c, c, 62, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.globalAlpha = 1;
-
-  ctx.lineWidth = 6;
   for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]] as const) {
     ctx.beginPath();
-    ctx.moveTo(c + dx * 74, c + dy * 74);
-    ctx.lineTo(c + dx * 116, c + dy * 116);
+    ctx.moveTo(c + dx * 62, c + dy * 62);
+    ctx.lineTo(c + dx * 104, c + dy * 104);
     ctx.stroke();
   }
   ctx.beginPath();
-  ctx.arc(c, c, 4, 0, Math.PI * 2);
+  ctx.arc(c, c, 3, 0, Math.PI * 2);
   ctx.fill();
   return texture(canvas);
 }
@@ -224,31 +266,56 @@ function retrogradeTexture(): Texture {
   return texture(canvas);
 }
 
+/**
+ * Steuerzeiger: ein offener Ring, sonst nichts. Die Striche, die er frueher
+ * hatte, uebernimmt der Halm zum Fadenkreuz — der sagt dasselbe, aber er sagt
+ * auch, *woher* der Ausschlag kommt.
+ */
 function cursorTexture(): Texture {
-  const [canvas, ctx] = symbolCanvas(128);
+  const [canvas, ctx] = symbolCanvas(128, false);
   const c = 64;
-  ctx.lineWidth = 6;
+  ctx.lineWidth = 7;
   ctx.beginPath();
-  ctx.arc(c, c, 20, 0, Math.PI * 2);
+  ctx.arc(c, c, 34, 0, Math.PI * 2);
   ctx.stroke();
-  for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]] as const) {
-    ctx.beginPath();
-    ctx.moveTo(c + dx * 32, c + dy * 32);
-    ctx.lineTo(c + dx * 50, c + dy * 50);
-    ctx.stroke();
-  }
   return texture(canvas);
 }
 
-/** Ring des Vollausschlags: eine duenne Linie, kein Symbol. */
-function ringGeometry(segments = 96): BufferGeometry {
+/**
+ * Grenze des Vollausschlags — vier kurze Boegen an den Hauptrichtungen statt
+ * eines geschlossenen Kreises.
+ *
+ * **Warum ueberhaupt und warum nur manchmal:** in Assist und Newton bleibt der
+ * Mausausschlag stehen, wo man ihn hinschiebt (virtuelles Steuerkreuz wie in
+ * Privateer). Dann ist es wichtig zu wissen, wo Anschlag ist. Im
+ * Arcade-Modus — dem Standard — gibt es keinen stehenden Ausschlag: die Maus
+ * dreht direkt, und die Grenze ist eine Drehratenbegrenzung, die man nicht als
+ * Kreis im Bild braucht. Dort war der Ring ein grosser leuchtender Kreis ohne
+ * Bedeutung.
+ */
+function limitGeometry(): BufferGeometry {
   const points: number[] = [];
-  for (let i = 0; i <= segments; i++) {
-    const a = (i / segments) * Math.PI * 2;
-    points.push(Math.cos(a), Math.sin(a), 0);
+  const span = (16 * Math.PI) / 180;
+  const steps = 8;
+  for (let quarter = 0; quarter < 4; quarter++) {
+    const centre = (quarter * Math.PI) / 2;
+    for (let i = 0; i < steps; i++) {
+      const a0 = centre - span + ((2 * span) / steps) * i;
+      const a1 = centre - span + ((2 * span) / steps) * (i + 1);
+      points.push(Math.cos(a0), Math.sin(a0), 0, Math.cos(a1), Math.sin(a1), 0);
+    }
   }
   const geometry = new BufferGeometry();
   geometry.setAttribute('position', new Float32BufferAttribute(points, 3));
+  return geometry;
+}
+
+/** Zwei Punkte: Fadenkreuz und Steuerzeiger. Wird je Bild neu gesetzt. */
+function stemGeometry(): BufferGeometry {
+  const geometry = new BufferGeometry();
+  const attribute = new Float32BufferAttribute(new Float32Array(6), 3);
+  attribute.setUsage(DynamicDrawUsage);
+  geometry.setAttribute('position', attribute);
   return geometry;
 }
 
@@ -310,7 +377,9 @@ export class GlassHud {
 
   private readonly crosshair: Mesh;
   private readonly cursor: Mesh;
-  private readonly ring: Line;
+  /** Halm vom Fadenkreuz zum Steuerzeiger — zeigt den Ausschlag als Strecke. */
+  private readonly stem: Line;
+  private readonly limit: LineSegments;
   private readonly prograde: Mesh;
   private readonly retrograde: Mesh;
   private readonly lead: Mesh;
@@ -326,23 +395,39 @@ export class GlassHud {
     this.group.name = 'GlassHud';
     this.group.renderOrder = 900;
 
-    this.crosshair = symbol(crosshairTexture(), 0.34, FLIGHT_COLOR);
-    this.cursor = symbol(cursorTexture(), 0.13, FLIGHT_COLOR, 0.8);
+    this.crosshair = symbol(crosshairTexture(), 0.24, RETICLE_COLOR, 0.9);
+    this.cursor = symbol(cursorTexture(), 0.075, RETICLE_COLOR, 0.9);
     this.prograde = symbol(progradeTexture(), 0.15, FLIGHT_COLOR, 0.9);
     this.retrograde = symbol(retrogradeTexture(), 0.15, FLIGHT_COLOR, 0.55);
     this.lead = symbol(leadTexture(), 0.11, TARGET_COLOR, 0.95);
 
-    const ringMaterial = new LineBasicMaterial({
-      color: FLIGHT_COLOR,
-      transparent: true,
-      opacity: 0.16,
-      blending: AdditiveBlending,
-      depthTest: false,
-      depthWrite: false,
-    });
-    this.ring = new Line(ringGeometry(), ringMaterial);
-    this.ring.renderOrder = 899;
-    this.ring.frustumCulled = false;
+    this.stem = new Line(
+      stemGeometry(),
+      new LineBasicMaterial({
+        color: RETICLE_COLOR,
+        transparent: true,
+        opacity: 0.55,
+        blending: AdditiveBlending,
+        depthTest: false,
+        depthWrite: false,
+      }),
+    );
+    this.stem.renderOrder = 899;
+    this.stem.frustumCulled = false;
+
+    this.limit = new LineSegments(
+      limitGeometry(),
+      new LineBasicMaterial({
+        color: RETICLE_COLOR,
+        transparent: true,
+        opacity: 0.22,
+        blending: AdditiveBlending,
+        depthTest: false,
+        depthWrite: false,
+      }),
+    );
+    this.limit.renderOrder = 899;
+    this.limit.frustumCulled = false;
 
     // Vier Ecken statt eines Rahmens: die Klammer waechst mit dem Ziel, die
     // Ecken bleiben gleich gross und verdecken so gut wie nichts.
@@ -373,7 +458,8 @@ export class GlassHud {
     this.targetGroup.visible = false;
 
     this.group.add(
-      this.ring,
+      this.limit,
+      this.stem,
       this.crosshair,
       this.cursor,
       this.prograde,
@@ -420,9 +506,12 @@ export class GlassHud {
 
     // Fadenkreuz: die Kanonenlinie, also die Nase des Schiffs (-Z im Rig).
     this.place(this.crosshair, _dir.set(0, 0, -1));
+    // Trefferrueckmeldung ueber die Groesse, nicht ueber die Helligkeit: ein
+    // kurzes Zucken sieht man auch aus dem Augenwinkel, ohne dass das Zeichen
+    // dabei aufleuchtet.
     const flash = Math.max(0, 1 - state.sinceHit / HIT_FLASH);
-    this.crosshair.scale.setScalar(1 + flash * 0.18);
-    (this.crosshair.material as MeshBasicMaterial).opacity = 0.85 + flash * 0.15;
+    this.crosshair.scale.setScalar(1 + flash * 0.22);
+    (this.crosshair.material as MeshBasicMaterial).opacity = 0.9;
 
     this.updateCursor(state, camera);
     this.updateMarkers(state);
@@ -450,20 +539,45 @@ export class GlassHud {
   }
 
   private updateCursor(state: HudState, camera: PerspectiveCamera): void {
-    const visible = state.pointerLocked;
-    this.cursor.visible = visible;
-    this.ring.visible = visible;
-    if (!visible) return;
+    // Der Anschlag gilt nur dort, wo der Ausschlag stehen bleibt — in Assist
+    // und Newton. Im Arcade-Modus dreht die Maus direkt, dort waere er ein
+    // grosser Kreis ohne Aussage. Siehe {@link limitGeometry}.
+    const stick = state.pointerLocked && state.mode !== 'arcade';
+    this.limit.visible = stick;
+    if (stick) {
+      this.place(this.limit, _tmp.copy(_forward));
+      this.limit.scale.setScalar(DEPTH * CURSOR_SPAN * Math.tan((camera.fov * Math.PI) / 360));
+    }
 
-    cursorDirection(state.mouseOffset.x, state.mouseOffset.y, camera.fov, _dir);
+    // Der Zeiger waechst aus dem Fadenkreuz heraus, statt darauf zu liegen:
+    // bei Ausschlag null saehe man sonst zwei Ringe uebereinander. So zeigt
+    // das Bild in Ruhe nur die Kanonenlinie, und sobald gesteuert wird, zieht
+    // sich eine Marke in die Richtung, in die man steuert.
+    const offset = state.mouseOffset;
+    const magnitude = Math.min(1, Math.hypot(offset.x, offset.y));
+    const fade = smoothstep(CURSOR_FADE_IN, CURSOR_FADE_FULL, magnitude);
+    const show = state.pointerLocked && fade > 0.01;
+    this.cursor.visible = show;
+    this.stem.visible = show;
+    if (!show) return;
+
+    (this.cursor.material as MeshBasicMaterial).opacity = 0.9 * fade;
+    (this.stem.material as LineBasicMaterial).opacity = 0.55 * fade;
+
+    cursorDirection(offset.x, offset.y, camera.fov, _dir);
     camera.getWorldQuaternion(_quat);
     _dir.applyQuaternion(_quat).applyQuaternion(_toLocal);
     this.place(this.cursor, _dir);
 
-    // Ring des Vollausschlags: liegt um die Blickachse, Radius = Ausschlag.
-    this.place(this.ring, _tmp.copy(_forward));
-    const radius = DEPTH * CURSOR_SPAN * Math.tan((camera.fov * Math.PI) / 360);
-    this.ring.scale.setScalar(radius);
+    // Halm: vom Fadenkreuz (Kanonenlinie) zum Zeiger, beide liegen bereits auf
+    // der Zeichenebene. Der Halm selbst bleibt ungedreht im Gruppenraum.
+    const points = this.stem.geometry.getAttribute('position') as Float32BufferAttribute;
+    const from = this.crosshair.position;
+    const to = this.cursor.position;
+    points.setXYZ(0, from.x, from.y, from.z);
+    points.setXYZ(1, to.x, to.y, to.z);
+    points.needsUpdate = true;
+    this.stem.geometry.computeBoundingSphere();
   }
 
   private updateMarkers(state: HudState): void {

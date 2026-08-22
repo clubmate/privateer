@@ -336,3 +336,30 @@ describe('createLineOfSight', () => {
     expect(los(from, to, 7)).toBe(true);
   });
 });
+
+describe('MiningSystem — Scan per Mausklick', () => {
+  it('schaltet nicht um, sondern setzt neu an', () => {
+    const { mining, field } = setup();
+    mining.beginScan(0);
+    mining.update(0.1, 0, ORIGIN);
+    expect(mining.getStatus().phase).toBe('scan');
+
+    // Zweimal hintereinander erfassen darf den Scan nicht abwuergen — anders
+    // als die Taste, die bewusst ein Schalter ist.
+    mining.beginScan(0);
+    mining.update(0.1, 0, ORIGIN);
+    expect(mining.getStatus().phase).toBe('scan');
+    expect(field.getGeneration(0)).toBe(0);
+  });
+
+  it('laesst einen bekannten Brocken in Ruhe', () => {
+    const { mining } = setup();
+    mining.remember(0);
+    expect(mining.isScanned(0)).toBe(true);
+
+    mining.beginScan(0);
+    mining.update(0.1, 0, ORIGIN);
+    // Kein zweiter Scan: die Antwort steht schon fest.
+    expect(mining.getStatus().scanProgress).toBe(0);
+  });
+});

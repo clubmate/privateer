@@ -576,6 +576,14 @@ renderer.setAnimationLoop(() => {
     forward.set(0, 0, -1).applyQuaternion(ship.quaternion);
     targeting.cycle(asteroids, ship.position, forward);
   }
+  // Rechte Maustaste erfasst, worauf das Fadenkreuz zeigt — und legt bei
+  // einem unbekannten Brocken gleich den Scanner an. Zwei Handgriffe, die
+  // ohnehin immer zusammen kamen: erst T bis der richtige dran war, dann R.
+  if (!player.isWalking && input.wasMousePressed(2)) {
+    forward.set(0, 0, -1).applyQuaternion(ship.quaternion);
+    const acquired = targeting.acquire(asteroids, ship.position, forward);
+    if (acquired >= 0) mining.beginScan(acquired);
+  }
   // --- Bergbau --- R scannt den erfassten Brocken, M haelt den Foerderstrahl.
   if (!player.isWalking && input.wasPressed('KeyR')) mining.requestScan();
   mining.setBeam(!player.isWalking && input.isDown('KeyM'));

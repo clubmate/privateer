@@ -12,6 +12,8 @@ export class Input {
   private mouseDY = 0;
 
   private readonly buttons = new Set<number>();
+  /** Maustasten, die in diesem Bild heruntergedrueckt wurden. */
+  private readonly buttonsPressed = new Set<number>();
   private locked = false;
 
   constructor(private readonly target: HTMLElement) {
@@ -21,6 +23,7 @@ export class Input {
     window.addEventListener('mousemove', this.onMouseMove);
     window.addEventListener('mousedown', this.onMouseDown);
     window.addEventListener('mouseup', this.onMouseUp);
+    window.addEventListener('contextmenu', this.onContextMenu);
     document.addEventListener('pointerlockchange', this.onPointerLockChange);
   }
 
@@ -31,6 +34,7 @@ export class Input {
     window.removeEventListener('mousemove', this.onMouseMove);
     window.removeEventListener('mousedown', this.onMouseDown);
     window.removeEventListener('mouseup', this.onMouseUp);
+    window.removeEventListener('contextmenu', this.onContextMenu);
     document.removeEventListener('pointerlockchange', this.onPointerLockChange);
   }
 
@@ -51,6 +55,15 @@ export class Input {
 
   isMouseDown(button = 0): boolean {
     return this.buttons.has(button);
+  }
+
+  /**
+   * Maustaste wurde in diesem Bild heruntergedrueckt (bis `endFrame()`).
+   * Flanke, kein Pegel — zum Erfassen eines Ziels taugt nur der Moment des
+   * Druckes, sonst wuerde bei gehaltener Taste je Bild neu erfasst.
+   */
+  wasMousePressed(button = 0): boolean {
+    return this.buttonsPressed.has(button);
   }
 
   get pointerLocked(): boolean {
@@ -82,6 +95,7 @@ export class Input {
   endFrame(): void {
     this.pressed.clear();
     this.released.clear();
+    this.buttonsPressed.clear();
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
@@ -101,6 +115,7 @@ export class Input {
   private onBlur = (): void => {
     this.held.clear();
     this.buttons.clear();
+    this.buttonsPressed.clear();
     this.mouseDX = 0;
     this.mouseDY = 0;
   };
@@ -112,7 +127,17 @@ export class Input {
   };
 
   private onMouseDown = (e: MouseEvent): void => {
+    if (!this.buttons.has(e.button)) this.buttonsPressed.add(e.button);
     this.buttons.add(e.button);
+  };
+
+  /**
+   * Kein Kontextmenue: die rechte Maustaste erfasst Ziele. Bei gefangenem
+   * Zeiger unterdrueckt der Browser es ohnehin — ohne diese Zeile poppte es
+   * aber auf, sobald der Zeiger frei ist (Stationsmenue, Pause).
+   */
+  private onContextMenu = (e: MouseEvent): void => {
+    e.preventDefault();
   };
 
   private onMouseUp = (e: MouseEvent): void => {

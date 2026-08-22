@@ -91,7 +91,7 @@ export class Hud {
         </div>
       </div>
 
-      <div class="hud__keys hud__keys--flight">MAUS/LEER&nbsp;FEUERN &middot; T&nbsp;ZIEL &middot; R&nbsp;SCAN &middot; M&nbsp;FOERDERN &middot; W/S&nbsp;SET&nbsp;SPEED &middot; Q/E&nbsp;ROLL &middot; A/D&nbsp;STRAFE &middot; SHIFT/CTRL&nbsp;LIFT &middot; X&nbsp;FULL&nbsp;STOP &middot; TAB&nbsp;BURN &middot; V&nbsp;FLUGMODUS &middot; G&nbsp;ANDOCKEN &middot; L&nbsp;LANDEN &middot; C&nbsp;AUSSENANSICHT &middot; H&nbsp;HILFSANZEIGE &middot; ESC&nbsp;MENUE&nbsp;ZU &middot; F&nbsp;AUFSTEHEN</div>
+      <div class="hud__keys hud__keys--flight">MAUS/LEER&nbsp;FEUERN &middot; RECHTSKLICK&nbsp;ZIEL+SCAN &middot; T&nbsp;ZIEL &middot; R&nbsp;SCAN &middot; M&nbsp;FOERDERN &middot; W/S&nbsp;SET&nbsp;SPEED &middot; A/D&nbsp;ROLL &middot; Q/E&nbsp;STRAFE &middot; SHIFT/CTRL&nbsp;LIFT &middot; X&nbsp;FULL&nbsp;STOP &middot; TAB&nbsp;BURN &middot; V&nbsp;FLUGMODUS &middot; G&nbsp;ANDOCKEN &middot; L&nbsp;LANDEN &middot; C&nbsp;AUSSENANSICHT &middot; H&nbsp;HILFSANZEIGE &middot; ESC&nbsp;MENUE&nbsp;ZU &middot; F&nbsp;AUFSTEHEN</div>
       <div class="hud__keys hud__keys--walk">W/A/S/D&nbsp;GEHEN &middot; MAUS&nbsp;UMSEHEN &middot; F&nbsp;HINSETZEN,&nbsp;REPARIEREN,&nbsp;WERKZEUG,&nbsp;FRACHT &middot; ESC&nbsp;PANEL&nbsp;ZU</div>
       <div class="hud__damage"></div>
       <div class="hud__prompt" hidden></div>

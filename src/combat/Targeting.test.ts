@@ -151,3 +151,53 @@ describe('Targeting', () => {
     expect(targeting.getIndex()).toBe(-1);
   });
 });
+
+describe('Targeting.acquire', () => {
+  /** Feld mit genau einem Brocken, sauber vor der Nase abgesetzt. */
+  function single(distance = 600, radius = 40): { asteroids: Asteroids; centre: Vector3 } {
+    const asteroids = new Asteroids({ count: 1, minRadius: radius, maxRadius: radius, seed: 3 });
+    const centre = new Vector3(0, 0, -distance);
+    const internals = asteroids as unknown as { positions: Vector3[]; velocities: Vector3[] };
+    internals.positions[0]!.copy(centre);
+    internals.velocities[0]!.set(0, 0, 0);
+    return { asteroids, centre };
+  }
+
+  const origin = new Vector3(0, 0, 0);
+  const ahead = new Vector3(0, 0, -1);
+
+  it('erfasst den Brocken, auf den die Ziellinie zeigt', () => {
+    const { asteroids } = single();
+    const targeting = new Targeting();
+    expect(targeting.acquire(asteroids, origin, ahead)).toBe(0);
+    expect(targeting.getIndex()).toBe(0);
+  });
+
+  it('faengt den knapp verfehlten Rand ueber den Kegel ab', () => {
+    const { asteroids } = single(600, 20);
+    const targeting = new Targeting();
+    // Zwei Grad daneben: der Strahl geht vorbei, der Kegel (fuenf Grad) nicht.
+    const off = new Vector3(Math.sin(0.035), 0, -Math.cos(0.035));
+    expect(targeting.acquire(asteroids, origin, off)).toBe(0);
+  });
+
+  it('erfasst nichts, was weit neben der Nase liegt', () => {
+    const { asteroids } = single(600, 20);
+    const targeting = new Targeting();
+    // Fuenfzehn Grad daneben — das waere im Kegel von `cycle` (36 Grad), aber
+    // beim Zielen mit der Maus meint man genau das unter dem Fadenkreuz.
+    const wide = new Vector3(Math.sin(0.26), 0, -Math.cos(0.26));
+    expect(targeting.acquire(asteroids, origin, wide)).toBe(-1);
+  });
+
+  it('behaelt das bestehende Ziel, wenn man ins Leere klickt', () => {
+    const { asteroids } = single();
+    const targeting = new Targeting();
+    targeting.acquire(asteroids, origin, ahead);
+    // Nach hinten zielen: dort ist nichts.
+    expect(targeting.acquire(asteroids, origin, new Vector3(0, 0, 1))).toBe(-1);
+    // `cycle` wuerde hier auf -1 zuruecksetzen; ein Fehlklick soll das Ziel
+    // aber nicht kosten.
+    expect(targeting.getIndex()).toBe(0);
+  });
+});
