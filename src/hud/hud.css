@@ -9,7 +9,12 @@
   --hud-cyan: #66eaff;
   --hud-cyan-dim: rgba(102, 234, 255, 0.5);
   --hud-warn: #ffb347;
-  --hud-glow: 0 0 6px rgba(92, 255, 168, 0.55);
+  /*
+   * Kein Schimmer. Ein HUD steht dauerhaft im Bild — was dort glimmt, sitzt
+   * einem im Blick. Die Variable bleibt, damit die Stellen, die sie benutzen,
+   * eine gemeinsame Schraube behalten.
+   */
+  --hud-glow: none;
 
   position: fixed;
   inset: 0;

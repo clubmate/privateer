@@ -72,19 +72,20 @@ const HIT_FLASH = 0.18;
 const CURSOR_FADE_IN = 0.03;
 const CURSOR_FADE_FULL = 0.14;
 
-/** Farben. Werte ueber 1 sind Absicht: der Bloom soll sie aufgreifen. */
-const FLIGHT_COLOR = new Color(0.55, 2.1, 1.35);
-const TARGET_COLOR = new Color(2.4, 1.35, 0.45);
-
 /**
- * Farbe des Fadenkreuzes und des Steuerzeigers — bewusst *unterhalb* der
- * Bloom-Schwelle (0,75 Helligkeit, siehe `Postprocessing.ts`).
+ * Farben — alle *unterhalb* der Bloom-Schwelle.
  *
- * Der Rest des HUDs leuchtet absichtlich: eine Zielklammer soll ins Auge
- * springen. Das Fadenkreuz nicht — es steht dauerhaft in der Bildmitte, genau
- * dort, wo man hinsieht. Was dort leuchtet, blendet. Als saubere duenne Linie
- * gelesen ist es praeziser und stoert nicht.
+ * Die Schwelle liegt bei 0,75 Helligkeit (`THRESHOLD` in `Postprocessing.ts`),
+ * gewichtet nach 0,299/0,587/0,114. Frueher standen hier Werte ueber 1, damit
+ * der Bloom sie aufgreift und die Zeichen glimmen. Genau das soll das HUD
+ * nicht: es steht dauerhaft im Bild, und was dauerhaft glimmt, sitzt einem im
+ * Blick. Additiv gemischt sind die Zeichen auch so hell genug, um vor hellem
+ * Gestein zu stehen — sie bleiben eben Linien statt Lampen.
  */
+const FLIGHT_COLOR = new Color(0.22, 0.84, 0.54);
+const TARGET_COLOR = new Color(0.96, 0.54, 0.18);
+
+/** Fadenkreuz und Steuerzeiger: dieselbe Zurueckhaltung, etwas kuehler. */
 const RETICLE_COLOR = new Color(0.32, 0.78, 0.62);
 
 // ------------------------------------------------------------------ Rechnen
@@ -136,16 +137,13 @@ function smoothstep(edge0: number, edge1: number, x: number): number {
  * Leinwand fuer ein Symbol; weiss auf durchsichtig, die Farbe kommt vom
  * Material.
  *
- * `glow` legt einen weichen Hof um jede Linie. Fuer Bahnmarken und Zielklammer
- * ist er richtig — sie sollen als Leuchtspur lesbar sein, auch vor hellem
- * Gestein. Fuer Fadenkreuz und Steuerzeiger nicht: die stehen dauerhaft in
- * der Bildmitte, und ein Hof macht aus der duennen Linie dort einen
- * Leuchtfleck. Ohne ihn bleibt eine scharfe Kante.
+ * **Ohne Hof.** Frueher lag hier ein `shadowBlur` um jede Linie, damit die
+ * Zeichen als Leuchtspur lesbar sind. Das Ergebnis war aber, dass jedes
+ * Zeichen einen weichen Fleck um sich hatte — und weil ein HUD nun einmal
+ * dauerhaft im Bild steht, liest sich das als Schmutz auf der Scheibe, nicht
+ * als Projektion. Eine saubere duenne Linie ist praeziser und ruhiger.
  */
-function symbolCanvas(
-  size: number,
-  glow = true,
-): [HTMLCanvasElement, CanvasRenderingContext2D] {
+function symbolCanvas(size: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
   const canvas = document.createElement('canvas');
   canvas.width = size;
   canvas.height = size;
@@ -154,10 +152,6 @@ function symbolCanvas(
   ctx.strokeStyle = '#ffffff';
   ctx.fillStyle = '#ffffff';
   ctx.lineCap = 'round';
-  if (glow) {
-    ctx.shadowColor = 'rgba(255,255,255,0.9)';
-    ctx.shadowBlur = size * 0.05;
-  }
   return [canvas, ctx];
 }
 
@@ -177,7 +171,7 @@ function texture(canvas: HTMLCanvasElement): CanvasTexture {
  * Zeichen Form, ohne Flaeche zu fuellen.
  */
 function crosshairTexture(): Texture {
-  const [canvas, ctx] = symbolCanvas(256, false);
+  const [canvas, ctx] = symbolCanvas(256);
   const c = 128;
   // Fuenf Leinwandpixel sind auf dem Schirm knapp anderthalb — duenn genug,
   // dass es eine Linie bleibt, dick genug, dass sie nicht ausfranst.
@@ -272,7 +266,7 @@ function retrogradeTexture(): Texture {
  * auch, *woher* der Ausschlag kommt.
  */
 function cursorTexture(): Texture {
-  const [canvas, ctx] = symbolCanvas(128, false);
+  const [canvas, ctx] = symbolCanvas(128);
   const c = 64;
   ctx.lineWidth = 7;
   ctx.beginPath();
@@ -662,8 +656,6 @@ export class GlassHud {
     const ctx = this.labelCtx;
     ctx.clearRect(0, 0, 256, 96);
     ctx.fillStyle = '#ffffff';
-    ctx.shadowColor = 'rgba(255,255,255,0.8)';
-    ctx.shadowBlur = 6;
     ctx.font = 'bold 30px ui-monospace, Menlo, monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
