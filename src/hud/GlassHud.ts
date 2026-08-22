@@ -1,14 +1,9 @@
 import {
   AdditiveBlending,
-  BufferGeometry,
   CanvasTexture,
   Color,
-  DynamicDrawUsage,
-  Float32BufferAttribute,
   Group,
   Line,
-  LineBasicMaterial,
-  LineSegments,
   Matrix4,
   Mesh,
   MeshBasicMaterial,
@@ -16,7 +11,7 @@ import {
   Quaternion,
   Vector3,
 } from 'three';
-import type { Object3D, PerspectiveCamera, Texture } from 'three';
+import type { Object3D, Texture } from 'three';
 import type { HudState } from './HudState';
 import { MINERALS } from '../world/AsteroidTypes';
 import { formatTons } from '../cargo/CargoHold';
@@ -43,13 +38,6 @@ import type { MiningStatus } from '../mining/MiningSystem';
 /** Abstand der Zeichenebene vom Augenpunkt in Metern (Nasenspitze: ca. 2,0 m). */
 const DEPTH = 2.4;
 
-/**
- * Vollausschlag des Steuerkreuzes als Anteil der halben Bildhoehe — derselbe
- * Wert, den das DOM-HUD als `CURSOR_RADIUS_FACTOR` 0,38 benutzt hat (0,38
- * Bildhoehe = 0,76 in NDC).
- */
-export const CURSOR_SPAN = 0.76;
-
 /** Groesse der Zielklammer auf der Zeichenebene, in Metern. */
 const BOX_MIN = 0.10;
 const BOX_MAX = 0.95;
@@ -63,14 +51,6 @@ const MARKER_MIN_SPEED = 1;
 
 /** So lange blitzt das Fadenkreuz nach einem Treffer auf, in Sekunden. */
 const HIT_FLASH = 0.18;
-
-/**
- * Ab welchem Ausschlag der Steuerzeiger einblendet und wann er voll da ist.
- * Unterhalb der ersten Schwelle liegt er ohnehin im Fadenkreuz — zwei Ringe
- * uebereinander lesen sich als Fehler, nicht als Anzeige.
- */
-const CURSOR_FADE_IN = 0.03;
-const CURSOR_FADE_FULL = 0.14;
 
 /**
  * Farben — alle *unterhalb* der Bloom-Schwelle.
@@ -91,21 +71,6 @@ const RETICLE_COLOR = new Color(0.32, 0.78, 0.62);
 // ------------------------------------------------------------------ Rechnen
 
 /**
- * Blickrichtung des Steuerkreuzes im Kameraraum. Der Mausoffset ist der
- * gleiche wie im DOM-HUD (-1..1, y positiv = unten); umgerechnet wird ueber
- * das Sichtfeld, damit das Kreuz an derselben Bildstelle sitzt wie vorher.
- */
-export function cursorDirection(
-  offsetX: number,
-  offsetY: number,
-  fovDeg: number,
-  out: Vector3,
-): Vector3 {
-  const tanHalf = Math.tan((fovDeg * Math.PI) / 360);
-  return out.set(CURSOR_SPAN * offsetX * tanHalf, -CURSOR_SPAN * offsetY * tanHalf, -1).normalize();
-}
-
-/**
  * Kantenlaenge der Zielklammer auf der Zeichenebene: so gross, dass sie den
  * Brocken wirklich einrahmt, aber nie unter Fingernagelgroesse faellt.
  */
@@ -123,12 +88,6 @@ export function markerOpacity(angleDeg: number, limitDeg = MARKER_LIMIT_DEG, fad
   if (angleDeg <= limitDeg - fadeDeg) return 1;
   if (angleDeg >= limitDeg) return 0;
   return (limitDeg - angleDeg) / fadeDeg;
-}
-
-/** Weiche Stufe zwischen zwei Schwellen, 0..1. */
-function smoothstep(edge0: number, edge1: number, x: number): number {
-  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
-  return t * t * (3 - 2 * t);
 }
 
 // ------------------------------------------------------------ Zeichenvorrat
@@ -260,59 +219,6 @@ function retrogradeTexture(): Texture {
   return texture(canvas);
 }
 
-/**
- * Steuerzeiger: ein offener Ring, sonst nichts. Die Striche, die er frueher
- * hatte, uebernimmt der Halm zum Fadenkreuz — der sagt dasselbe, aber er sagt
- * auch, *woher* der Ausschlag kommt.
- */
-function cursorTexture(): Texture {
-  const [canvas, ctx] = symbolCanvas(128);
-  const c = 64;
-  ctx.lineWidth = 7;
-  ctx.beginPath();
-  ctx.arc(c, c, 34, 0, Math.PI * 2);
-  ctx.stroke();
-  return texture(canvas);
-}
-
-/**
- * Grenze des Vollausschlags — vier kurze Boegen an den Hauptrichtungen statt
- * eines geschlossenen Kreises.
- *
- * **Warum ueberhaupt und warum nur manchmal:** in Assist und Newton bleibt der
- * Mausausschlag stehen, wo man ihn hinschiebt (virtuelles Steuerkreuz wie in
- * Privateer). Dann ist es wichtig zu wissen, wo Anschlag ist. Im
- * Arcade-Modus — dem Standard — gibt es keinen stehenden Ausschlag: die Maus
- * dreht direkt, und die Grenze ist eine Drehratenbegrenzung, die man nicht als
- * Kreis im Bild braucht. Dort war der Ring ein grosser leuchtender Kreis ohne
- * Bedeutung.
- */
-function limitGeometry(): BufferGeometry {
-  const points: number[] = [];
-  const span = (16 * Math.PI) / 180;
-  const steps = 8;
-  for (let quarter = 0; quarter < 4; quarter++) {
-    const centre = (quarter * Math.PI) / 2;
-    for (let i = 0; i < steps; i++) {
-      const a0 = centre - span + ((2 * span) / steps) * i;
-      const a1 = centre - span + ((2 * span) / steps) * (i + 1);
-      points.push(Math.cos(a0), Math.sin(a0), 0, Math.cos(a1), Math.sin(a1), 0);
-    }
-  }
-  const geometry = new BufferGeometry();
-  geometry.setAttribute('position', new Float32BufferAttribute(points, 3));
-  return geometry;
-}
-
-/** Zwei Punkte: Fadenkreuz und Steuerzeiger. Wird je Bild neu gesetzt. */
-function stemGeometry(): BufferGeometry {
-  const geometry = new BufferGeometry();
-  const attribute = new Float32BufferAttribute(new Float32Array(6), 3);
-  attribute.setUsage(DynamicDrawUsage);
-  geometry.setAttribute('position', attribute);
-  return geometry;
-}
-
 function symbolMaterial(map: Texture, color: Color, opacity = 1): MeshBasicMaterial {
   return new MeshBasicMaterial({
     map,
@@ -370,10 +276,6 @@ export class GlassHud {
   readonly group = new Group();
 
   private readonly crosshair: Mesh;
-  private readonly cursor: Mesh;
-  /** Halm vom Fadenkreuz zum Steuerzeiger — zeigt den Ausschlag als Strecke. */
-  private readonly stem: Line;
-  private readonly limit: LineSegments;
   private readonly prograde: Mesh;
   private readonly retrograde: Mesh;
   private readonly lead: Mesh;
@@ -390,38 +292,9 @@ export class GlassHud {
     this.group.renderOrder = 900;
 
     this.crosshair = symbol(crosshairTexture(), 0.24, RETICLE_COLOR, 0.9);
-    this.cursor = symbol(cursorTexture(), 0.075, RETICLE_COLOR, 0.9);
     this.prograde = symbol(progradeTexture(), 0.15, FLIGHT_COLOR, 0.9);
     this.retrograde = symbol(retrogradeTexture(), 0.15, FLIGHT_COLOR, 0.55);
     this.lead = symbol(leadTexture(), 0.11, TARGET_COLOR, 0.95);
-
-    this.stem = new Line(
-      stemGeometry(),
-      new LineBasicMaterial({
-        color: RETICLE_COLOR,
-        transparent: true,
-        opacity: 0.55,
-        blending: AdditiveBlending,
-        depthTest: false,
-        depthWrite: false,
-      }),
-    );
-    this.stem.renderOrder = 899;
-    this.stem.frustumCulled = false;
-
-    this.limit = new LineSegments(
-      limitGeometry(),
-      new LineBasicMaterial({
-        color: RETICLE_COLOR,
-        transparent: true,
-        opacity: 0.22,
-        blending: AdditiveBlending,
-        depthTest: false,
-        depthWrite: false,
-      }),
-    );
-    this.limit.renderOrder = 899;
-    this.limit.frustumCulled = false;
 
     // Vier Ecken statt eines Rahmens: die Klammer waechst mit dem Ziel, die
     // Ecken bleiben gleich gross und verdecken so gut wie nichts.
@@ -452,10 +325,7 @@ export class GlassHud {
     this.targetGroup.visible = false;
 
     this.group.add(
-      this.limit,
-      this.stem,
       this.crosshair,
-      this.cursor,
       this.prograde,
       this.retrograde,
       this.lead,
@@ -507,7 +377,6 @@ export class GlassHud {
     this.crosshair.scale.setScalar(1 + flash * 0.22);
     (this.crosshair.material as MeshBasicMaterial).opacity = 0.9;
 
-    this.updateCursor(state, camera);
     this.updateMarkers(state);
     this.updateTarget(state);
 
@@ -530,48 +399,6 @@ export class GlassHud {
   /** Winkel zwischen einer Richtung und der Blickachse, in Grad. */
   private angleToView(dirLocal: Vector3): number {
     return (Math.acos(Math.max(-1, Math.min(1, dirLocal.dot(_forward)))) * 180) / Math.PI;
-  }
-
-  private updateCursor(state: HudState, camera: PerspectiveCamera): void {
-    // Der Anschlag gilt nur dort, wo der Ausschlag stehen bleibt — in Assist
-    // und Newton. Im Arcade-Modus dreht die Maus direkt, dort waere er ein
-    // grosser Kreis ohne Aussage. Siehe {@link limitGeometry}.
-    const stick = state.pointerLocked && state.mode !== 'arcade';
-    this.limit.visible = stick;
-    if (stick) {
-      this.place(this.limit, _tmp.copy(_forward));
-      this.limit.scale.setScalar(DEPTH * CURSOR_SPAN * Math.tan((camera.fov * Math.PI) / 360));
-    }
-
-    // Der Zeiger waechst aus dem Fadenkreuz heraus, statt darauf zu liegen:
-    // bei Ausschlag null saehe man sonst zwei Ringe uebereinander. So zeigt
-    // das Bild in Ruhe nur die Kanonenlinie, und sobald gesteuert wird, zieht
-    // sich eine Marke in die Richtung, in die man steuert.
-    const offset = state.mouseOffset;
-    const magnitude = Math.min(1, Math.hypot(offset.x, offset.y));
-    const fade = smoothstep(CURSOR_FADE_IN, CURSOR_FADE_FULL, magnitude);
-    const show = state.pointerLocked && fade > 0.01;
-    this.cursor.visible = show;
-    this.stem.visible = show;
-    if (!show) return;
-
-    (this.cursor.material as MeshBasicMaterial).opacity = 0.9 * fade;
-    (this.stem.material as LineBasicMaterial).opacity = 0.55 * fade;
-
-    cursorDirection(offset.x, offset.y, camera.fov, _dir);
-    camera.getWorldQuaternion(_quat);
-    _dir.applyQuaternion(_quat).applyQuaternion(_toLocal);
-    this.place(this.cursor, _dir);
-
-    // Halm: vom Fadenkreuz (Kanonenlinie) zum Zeiger, beide liegen bereits auf
-    // der Zeichenebene. Der Halm selbst bleibt ungedreht im Gruppenraum.
-    const points = this.stem.geometry.getAttribute('position') as Float32BufferAttribute;
-    const from = this.crosshair.position;
-    const to = this.cursor.position;
-    points.setXYZ(0, from.x, from.y, from.z);
-    points.setXYZ(1, to.x, to.y, to.z);
-    points.needsUpdate = true;
-    this.stem.geometry.computeBoundingSphere();
   }
 
   private updateMarkers(state: HudState): void {

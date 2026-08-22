@@ -36,8 +36,6 @@ export interface HudState {
    */
   external: boolean;
   pointerLocked: boolean;
-  /** Virtueller Mausoffset, -1..1 (y positiv = unten). */
-  mouseOffset: { x: number; y: number };
   /** Zahl der zerstoerten Brocken. */
   kills: number;
   /** Sekunden seit dem letzten Treffer (Fadenkreuz blitzt auf). */

@@ -39,15 +39,6 @@ export interface SeatedControllerOptions {
   degreesPerPixel: number;
   /** Glaettung der gemessenen Mausgeschwindigkeit im Arcade-Modus, in Sekunden. */
   aimSmoothing: number;
-  /**
-   * Maus hoch = Nase runter, wie am Steuerhorn.
-   *
-   * Betrifft nur die Nickachse und nur den Flug — das Umsehen zu Fuss bleibt
-   * unveraendert, dort erwartet man Blickrichtung, keine Steuerflaeche. Der
-   * Zeiger im HUD folgt weiterhin der *Maus*, nicht der Nase: er zeigt, was
-   * der Pilot befiehlt, und nicht, wohin das Schiff daraufhin kippt.
-   */
-  invertPitch: boolean;
 }
 
 const DEFAULT_OPTIONS: SeatedControllerOptions = {
@@ -57,7 +48,6 @@ const DEFAULT_OPTIONS: SeatedControllerOptions = {
   repeatDelay: 0.3,
   degreesPerPixel: 0.08,
   aimSmoothing: 0.035,
-  invertPitch: true,
 };
 
 /**
@@ -65,15 +55,12 @@ const DEFAULT_OPTIONS: SeatedControllerOptions = {
  *
  * **Arcade** (Standard): die Maus dreht das Schiff direkt, Pixel mal
  * {@link SeatedControllerOptions.degreesPerPixel}; steht die Maus still, steht
- * auch die Drehung. Das HUD zeigt den aktuellen Steuerbefehl als Cursor.
+ * auch die Drehung.
  *
  * **Newton und Assist**: Maus wie in Privateer — die Mausdeltas summieren
  * sich zu einem virtuellen Offset vom Bildschirmzentrum (geclampt auf den
  * Einheitskreis). Der Offset bleibt stehen, wo der Pilot ihn hinschiebt, und
  * erzeugt proportionalen Pitch-/Yaw-Torque.
- *
- * Die Nickachse ist in beiden Faellen umgekehrt (siehe
- * {@link SeatedControllerOptions.invertPitch}).
  *
  * `update()` laeuft einmal pro Frame (siehe dort). Ueber `enable()`/`disable()`
  * abschaltbar — AP4 (Walk-Mode) schaltet ihn beim Aufstehen ab und beim
@@ -120,11 +107,6 @@ export class SeatedController {
     this.aimRate.set(0, 0);
     this.flight.clearInputs();
     this.holdTime.clear();
-  }
-
-  /** Virtueller Mausoffset fuer das HUD, Komponenten -1..1 (y: +unten). */
-  getMouseOffset(): Vector2 {
-    return this.offset;
   }
 
   /**
@@ -192,16 +174,13 @@ export class SeatedController {
     const rate = this.flight.getParams().arcade.turnRate;
     const gain = MathUtils.degToRad(this.options.degreesPerPixel) / rate;
 
-    const yaw = clamp(this.aimRate.x * gain, -1, 1);
-    // Mausweg nach unten ist positiv (dy>0). `down` ist damit direkt der
-    // Ausschlag, den der Zeiger anzeigen soll.
-    const down = clamp(this.aimRate.y * gain, -1, 1);
-
     const i = this.flight.inputs;
-    i.yaw = yaw;
-    i.pitch = this.options.invertPitch ? down : -down;
-    // Fuer das HUD: der Zeiger folgt der Maus (y positiv = unten).
-    this.offset.set(yaw, down);
+    i.yaw = clamp(this.aimRate.x * gain, -1, 1);
+    i.pitch = clamp(-this.aimRate.y * gain, -1, 1); // Maus hoch (dy<0) = Nase hoch
+    // Im Arcade-Modus gibt es keinen stehenden Ausschlag. Der Akkumulator
+    // wird trotzdem genullt, damit ein Wechsel nach Assist oder Newton mit
+    // zentriertem Steuerkreuz beginnt und nicht mit dem letzten Drehbefehl.
+    this.offset.set(0, 0);
   }
 
   /** Newton: aufsummierter Ausschlag, der stehen bleibt (Privateer-Trimmung). */
@@ -222,9 +201,7 @@ export class SeatedController {
 
     const i = this.flight.inputs;
     i.yaw = this.offset.x * response;
-    // `offset.y` ist positiv nach unten. Ohne Umkehr hiesse Maus hoch also
-    // Nase hoch; mit Umkehr Nase runter, wie am Steuerhorn.
-    i.pitch = (this.options.invertPitch ? this.offset.y : -this.offset.y) * response;
+    i.pitch = -this.offset.y * response; // Maus nach oben (dy<0) = Nase hoch
   }
 
   // ------------------------------------------------------- Sollgeschwindigkeit

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Vector3 } from 'three';
-import { boxEdge, cursorDirection, CURSOR_SPAN, markerOpacity, miningLine } from './GlassHud';
+import { boxEdge, markerOpacity, miningLine } from './GlassHud';
 import type { MiningStatus } from '../mining/MiningSystem';
 
 /**
@@ -8,45 +8,6 @@ import type { MiningStatus } from '../mining/MiningSystem';
  * wird. Das Zeichnen laeuft ueber Canvas und WebGL und gehoert ins Bild, nicht
  * in einen Test.
  */
-
-const FOV = 65;
-const tanHalf = Math.tan((FOV * Math.PI) / 360);
-/** Bildkoordinate (NDC) einer Richtung im Kameraraum. */
-const ndc = (dir: Vector3) => ({
-  x: dir.x / (-dir.z * tanHalf),
-  y: dir.y / (-dir.z * tanHalf),
-});
-
-describe('cursorDirection', () => {
-  it('zeigt ohne Ausschlag genau nach vorn', () => {
-    const dir = cursorDirection(0, 0, FOV, new Vector3());
-    expect(dir.x).toBeCloseTo(0, 6);
-    expect(dir.y).toBeCloseTo(0, 6);
-    expect(dir.z).toBeCloseTo(-1, 6);
-  });
-
-  it('liefert eine Richtung der Laenge eins', () => {
-    expect(cursorDirection(1, -1, FOV, new Vector3()).length()).toBeCloseTo(1, 6);
-  });
-
-  it('legt den Ausschlag nach rechts und (y positiv) nach unten', () => {
-    const dir = cursorDirection(0.5, 0.5, FOV, new Vector3());
-    expect(dir.x).toBeGreaterThan(0);
-    expect(dir.y).toBeLessThan(0);
-  });
-
-  it('trifft dieselbe Bildstelle wie das fruehere DOM-Overlay', () => {
-    const dir = cursorDirection(0.5, 0.25, FOV, new Vector3());
-    const p = ndc(dir);
-    expect(p.x).toBeCloseTo(CURSOR_SPAN * 0.5, 6);
-    expect(p.y).toBeCloseTo(-CURSOR_SPAN * 0.25, 6);
-  });
-
-  it('bleibt beim Vollausschlag innerhalb des Bildes', () => {
-    const p = ndc(cursorDirection(1, 1, FOV, new Vector3()));
-    expect(Math.abs(p.y)).toBeLessThan(1);
-  });
-});
 
 describe('boxEdge', () => {
   it('waechst mit der scheinbaren Groesse des Brockens', () => {

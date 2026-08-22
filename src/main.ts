@@ -546,7 +546,6 @@ function render(dt: number): void {
     walking: player.isWalking,
     external: externalView,
     pointerLocked: input.pointerLocked,
-    mouseOffset: seated.getMouseOffset(),
     kills: weapons.kills,
     sinceHit: weapons.getTimeSinceHit(),
     target,
